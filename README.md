@@ -62,22 +62,37 @@ roverdevkit/
 
 ## Installation
 
-### Analytical track only (Path 1 — works everywhere)
+The primary supported setup is **miniforge + conda**, because PyChrono
+(required for the multi-fidelity SCM correction layer in Path 2) is only
+distributed via conda.
+
+### With PyChrono SCM — primary path (Linux / macOS, Apple Silicon supported)
+
+```bash
+# macOS
+brew install --cask miniforge
+
+# Then, from the repo root:
+mamba env create -f environment.yml
+conda activate roverdevkit
+pip install -e ".[dev]"          # test, lint, and notebook tooling
+pytest -q                        # sanity check
+```
+
+The env uses **Python 3.12** (conda-forge's PyChrono builds skip 3.11).
+See [`project_log.md`](project_log.md) for the decision log.
+
+### Analytical track only (Path 1 fallback — any platform, any Python ≥ 3.11)
+
+If PyChrono install fails on your platform, or you want a lightweight
+analysis-only install:
 
 ```bash
 pip install -e ".[dev]"
 ```
 
-### With PyChrono SCM (Path 2 — optional, Linux/macOS)
-
-```bash
-conda env create -f environment.yml
-conda activate roverdevkit
-```
-
-If PyChrono install fails on your platform, fall back to the analytical track
-— the project plan is designed so that Path 1 alone is sufficient to produce
-a publishable result (see [`project_plan.md` §5](project_plan.md)).
+The project is designed so that Path 1 alone is sufficient to produce a
+publishable result ([`project_plan.md` §5](project_plan.md)).
 
 ## Development
 
