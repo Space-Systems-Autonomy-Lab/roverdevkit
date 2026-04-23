@@ -1,0 +1,80 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual envs
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Testing / coverage
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+htmlcov/
+.pytest_cache/
+coverage.xml
+*.cover
+
+# Type checkers
+.mypy_cache/
+.pyre/
+.pytype/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Project data — large artifacts are not checked in.
+# We keep the directory structure via .gitkeep files.
+data/analytical/*
+!data/analytical/.gitkeep
+data/scm/*
+!data/scm/.gitkeep
+data/validation/raw/*
+!data/validation/raw/.gitkeep
+
+# Pretrained models — ship only the canonical one once trained.
+pretrained/*.pkl
+pretrained/checkpoints/
+
+# Logs
+logs/
+*.log
+
+# Project-specific scratch
+scratch/
+tmp/
