@@ -59,3 +59,39 @@ xfails are intentional — they mark tests against modules implemented in
 Weeks 1–4 (Bekker-Wong, solar, evaluator). Schema validation tests all
 pass, confirming the pydantic `DesignVector` / `MissionScenario` /
 `MissionMetrics` enforce every bound in §3.1.
+
+## 2026-04-23 — Bekker-Wong + Janosi-Hanamoto analytical model (Week 1)
+
+**Decision.** `roverdevkit.terramechanics.bekker_wong.single_wheel_forces`
+is implemented. Rigid wheel, θ₂ = 0, piecewise radial stress with
+θ_m = (0.4 + 0.2·|s|)·θ₁ (Wong 2008, ch. 4). Entry angle solved by
+`scipy.optimize.brentq` on the vertical-force residual; integrals
+evaluated by `np.trapezoid` on a 100-point uniform θ grid.
+
+**Context.** Pure-NumPy / SciPy path, no autodiff, no JIT. Benchmark:
+**~0.46 ms per call** on M-series Mac — under the < 1 ms budget (§4).
+Pytest has 13 physics-first-principles tests + 1 xfail placeholder for a
+Wong worked example (populate in Week 9 with validation digitization).
+
+**A subtlety worth remembering.** The pure Bekker-Wong integral for
+drawbar pull at s = 0 can be slightly positive for high-friction soils
+(Apollo regolith, φ ≈ 46°) because the kinematic Janosi-Hanamoto shear
+term stays nonzero at zero slip. At realistic lunar per-wheel loads
+(~4 N for a Rashid-class rover) DP(s = 0) is correctly small-negative
+and matches the plate compaction resistance in magnitude; the pathology
+only shows up in overloaded edge cases where sinkage exceeds ~4 cm. This
+is a known ±15–30 % weakness of the analytical model and is exactly
+what the Path-2 SCM correction layer is designed to absorb. Tests
+therefore assert ``|DP(0)| ≪ |DP(0.3)|`` rather than ``DP(0) < 0``.
+
+**Consequences.**
+
+- Terramechanics is ahead of schedule for Week 1.
+- `_integrate_forces` is exposed privately (leading underscore) but
+  imported by tests for force-balance self-consistency. If Week 5's
+  SCM calibration or Week 9's validation script needs it, promote to
+  public API at that point.
+- `ruff --fix` cleaned up four pre-existing lints in the Week-0 stubs
+  (`UP037` quoted self-type annotations, `F401` unused `numpy`
+  imports). Baseline is now lint-clean.
+- Ready to move on to Week 2: PyChrono SCM harness + go/no-go gate.

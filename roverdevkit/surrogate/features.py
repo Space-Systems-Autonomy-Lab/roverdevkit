@@ -17,7 +17,6 @@ so that the mission evaluator itself doesn't take a dependency on it.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 

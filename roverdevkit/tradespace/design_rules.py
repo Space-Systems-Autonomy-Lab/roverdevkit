@@ -22,8 +22,6 @@ def compute_shap_values(surrogate, x: pd.DataFrame) -> pd.DataFrame:
     raise NotImplementedError("Implement in Week 12 per project_plan.md §6.")
 
 
-def extract_design_rules(
-    surrogate, x: pd.DataFrame, *, top_k: int = 5
-) -> list[str]:
+def extract_design_rules(surrogate, x: pd.DataFrame, *, top_k: int = 5) -> list[str]:
     """Extract human-readable design rules from SHAP patterns."""
     raise NotImplementedError("Implement in Week 12 per project_plan.md §6.")
