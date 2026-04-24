@@ -1,32 +1,58 @@
 """Analytical terramechanics: Bekker-Wong pressure-sinkage + Janosi-Hanamoto shear.
 
-Implements single-wheel drawbar pull, sinkage, and driving torque as a
-function of wheel geometry, vertical load, slip, and soil parameters.
+Single-wheel drawbar pull, sinkage, and driving torque as a function of
+wheel geometry, vertical load, slip, and soil parameters.
 
-Primary reference:
-    Wong, J. Y. *Theory of Ground Vehicles*, 4th ed., Wiley, 2008 — chapters 2--4.
-    Following equation numbering from ch. 2 (pressure-sinkage), ch. 4
-    (wheel-soil interaction), and Wong & Reece (1967).
+Model overview
+--------------
+A rigid wheel of radius ``R`` and width ``b`` sinks a depth ``z_0`` into
+deformable soil. Under the contact patch (bounded by entry angle θ₁ and
+exit angle θ₂, with θ₂ = 0 for a rigid wheel by Wong's standard
+convention) the soil exerts a radial normal stress σ(θ) and a
+tangential shear stress τ(θ). Integrating these stresses around the
+contact patch yields the vertical load W, drawbar pull DP, and
+driving torque T. The entry angle θ₁ is pinned by the constraint that
+the integrated vertical force balances the applied load.
 
-Assumptions baked in for the rigid-wheel model:
+Primary sources
+---------------
+- Bekker, M. G. (1969). *Introduction to Terrain-Vehicle Systems*.
+  University of Michigan Press. [pressure-sinkage and plate compaction
+  resistance]
+- Janosi, Z. & Hanamoto, B. (1961). "The analytical determination of
+  drawbar pull as a function of slip for tracked vehicles in
+  deformable soils." Proc. 1st Int. Conf. Terrain-Vehicle Systems,
+  Turin, Italy. [mobilisation of shear with slip]
+- Wong, J. Y. & Reece, A. R. (1967). "Prediction of rigid wheel
+  performance based on the analysis of soil-wheel stresses: Part I.
+  Performance of driven rigid wheels." *J. Terramech.* 4(1):81-98.
+  [rigid-wheel adaptation and the piecewise rear-region formulation]
+- Wong, J. Y. (2008). *Theory of Ground Vehicles*, 4th ed., Wiley.
+  Chapters 2 (soil), 3 (track/wheel resistance), 4 (wheel-soil
+  interaction). [unified textbook treatment; reference for all the
+  equations used here]
 
-- Entry angle θ₁ measured from the wheel centre, positive forward.
-- Exit angle θ₂ = 0 (Wong's standard rigid-wheel assumption).
-- Transition angle for peak radial stress θ_m = (c₁ + c₂·|s|)·θ₁
-  with c₁ = 0.4, c₂ = 0.2 (Wong 2008; Ding 2011 report very similar
-  values from single-wheel experiments).
-- Soil parameters from Bekker + Mohr-Coulomb.
-- Grousers are ignored in the analytical path; their contribution is
-  picked up by the PyChrono SCM correction layer (Path 2).
+Assumptions
+-----------
+- Rigid wheel (no tire deflection).
+- Exit angle θ₂ = 0 (Wong's standard assumption — the soil rebounds
+  elastically behind the wheel and contributes nothing to the net
+  stress). More elaborate treatments (Ishigami 2007) let θ₂ < 0 with
+  an explicit bulldozing contribution; deferred to the SCM layer.
+- Transition angle for peak stress θ_m = (c₁ + c₂·|s|)·θ₁ with
+  c₁ = 0.4, c₂ = 0.2. These are Wong's typical empirical defaults;
+  Ding 2011 reports soil-dependent fits spanning c₁ ∈ [0.18, 0.43],
+  c₂ ∈ [0.09, 0.25]. Residuals go into the Path-2 correction layer.
+- Grousers ignored here; their contribution is picked up by the
+  PyChrono SCM track of the data-generation strategy.
 
-Validation roadmap:
-    - Ding et al. 2011, IEEE T-RO — single-wheel lunar-rover experiments.
-    - Iizuka & Kubota 2011 — grousered wheel experiments.
-    - Wong — worked examples from the textbook (used as unit-test ground truth).
+Validation roadmap (see ``data/validation/README.md``)
+------------------------------------------------------
+- Ding et al. 2011, IEEE T-RO — single-wheel lunar-rover experiments.
+- Iizuka & Kubota 2011 — grousered wheel experiments.
+- Wong — worked examples from the textbook (used as unit-test ground
+  truth once digitized).
 
-Design goal: pure Python + NumPy + SciPy, no hard dependencies beyond the
-scientific stack, < 1 ms per ``single_wheel_forces`` call so that 50k+
-mission evaluations are practical on a laptop.
 """
 
 from __future__ import annotations
@@ -38,16 +64,15 @@ import numpy as np
 from numpy.typing import NDArray
 from scipy.optimize import brentq
 
-# Stress-distribution coefficients (Wong 2008, ch. 4).
-# Ding 2011 fits give (c1, c2) ∈ (0.18–0.43, 0.09–0.25) depending on soil;
-# Wong's standard values below are a reasonable single-value default for
-# the analytical path. The Path-2 correction layer absorbs residuals.
+# Empirical coefficients for θ_m = (c₁ + c₂·|s|)·θ₁ (Wong & Reece 1967;
+# Wong 2008 §4.2). Treated as tunable "priors" whose residual is
+# absorbed by the Path-2 SCM correction layer.
 _C1_THETA_M: float = 0.4
 _C2_THETA_M: float = 0.2
 
-# Trapezoidal integration grid density. 100 points is well inside the
-# regime where integration error is much smaller than model-form error
-# (Bekker-Wong itself is a ±15–30 % model). Profiled at ~0.3 ms per call.
+# Trapezoidal grid for the angular integrals. 100 points puts
+# integration error well below the ±15-30 % model-form error of
+# Bekker-Wong. Profiled at ~0.3 ms per evaluation.
 _N_QUAD: int = 100
 
 
@@ -79,7 +104,11 @@ class SoilParameters:
     """Internal friction angle φ, degrees."""
 
     shear_modulus_k_m: float = 0.018
-    """Janosi-Hanamoto shear-deformation modulus K, meters. Default from Wong."""
+    """Janosi-Hanamoto shear-deformation modulus K, meters.
+
+    Default 0.018 m from Wong 2008; typical lunar-simulant range is
+    0.006–0.025 m depending on density and moisture.
+    """
 
 
 @dataclass(frozen=True)
@@ -106,19 +135,23 @@ class WheelForces:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers (all SI once inside)
+# Internal helpers (all in SI inside)
 # ---------------------------------------------------------------------------
 
 
 def _effective_modulus_pa_per_m_n(soil: SoilParameters, width_m: float) -> float:
-    """Combined modulus (k_c/b + k_phi) converted to SI: Pa/m^n.
+    """Combined Bekker modulus, converted to SI.
 
-    Bekker's pressure-sinkage law is::
+    Bekker's pressure-sinkage law (Bekker 1969; Wong 2008 eq. 2.11):
 
-        p(z) = (k_c/b + k_phi) z^n
+    .. math::
 
-    With ``k_c`` in kN/m^(n+1) and ``k_phi`` in kN/m^(n+2), the combination
-    has units kN/m^(n+2). Multiply by 10³ to get Pa/m^n.
+        p(z) = \\left(\\frac{k_c}{b} + k_\\phi\\right)\\, z^{\\,n}
+
+    With ``k_c`` in kN/m^(n+1) and ``k_phi`` in kN/m^(n+2), the
+    bracketed group has units kN/m^(n+2). Multiply by 10³ to get
+    Pa/m^n so the product ``k_eff · z^n`` (with z in metres) lands in
+    Pascals.
     """
     return (soil.k_c / width_m + soil.k_phi) * 1000.0
 
@@ -129,10 +162,11 @@ def _integrate_forces(
     soil: SoilParameters,
     slip: float,
 ) -> tuple[float, float, float]:
-    """Return ``(W, DP, T)`` in SI for a given entry angle θ₁.
+    """Integrate σ(θ) and τ(θ) around the contact patch.
 
-    ``W`` is the integrated vertical force, ``DP`` the drawbar pull, ``T``
-    the driving torque about the wheel axis.
+    Returns ``(W, DP, T)`` in SI units (N, N, N·m) for a given entry
+    angle θ₁. ``W`` is the integrated vertical force — the quantity
+    that must equal the applied load for the wheel to be in equilibrium.
     """
     if theta_1 <= 0.0:
         return 0.0, 0.0, 0.0
@@ -145,45 +179,128 @@ def _integrate_forces(
     shear_modulus_m = soil.shear_modulus_k_m
     k_eff = _effective_modulus_pa_per_m_n(soil, width_m)
 
+    # -----------------------------------------------------------------
+    # Peak-stress angle θ_m (Wong & Reece 1967; Wong 2008 §4.2):
+    #
+    #     θ_m = (c₁ + c₂·|s|)·θ₁
+    #
+    # splits the contact patch into a "front" region θ_m ≤ θ ≤ θ₁
+    # (where σ grows as the wheel penetrates) and a "rear" region
+    # θ₂ ≤ θ < θ_m (where σ decays toward zero at the exit angle θ₂).
+    # -----------------------------------------------------------------
     theta_m = (_C1_THETA_M + _C2_THETA_M * abs(slip)) * theta_1
 
-    # Angular grid from θ₂ = 0 to θ₁ (Wong assumes θ₂ = 0 for rigid wheels).
+    # Uniform grid from θ₂ = 0 to θ₁. 100 points is the budget (see
+    # _N_QUAD); quadrature error is far below Bekker-Wong's model-form
+    # error of ±15–30 %.
     theta: NDArray[np.float64] = np.linspace(0.0, theta_1, _N_QUAD)
     cos_theta = np.cos(theta)
     sin_theta = np.sin(theta)
     cos_theta_1 = math.cos(theta_1)
 
-    # Radial normal stress σ(θ). Piecewise per Wong:
-    #   front (θ_m ≤ θ ≤ θ₁): σ = k_eff R^n (cos θ − cos θ₁)^n
-    #   rear  (0   ≤ θ < θ_m): σ evaluated at a linearly-mapped θ★ such
-    #     that θ★ = θ₁ at θ = 0 and θ★ = θ_m at θ = θ_m.
-    arg_front = np.maximum(cos_theta - cos_theta_1, 0.0)
+    # -----------------------------------------------------------------
+    # Radial normal stress σ(θ)   (Wong & Reece 1967; Wong 2008 §4.2)
+    # -----------------------------------------------------------------
+    # Rigid-wheel geometry: the soil-surface intrusion depth at angle
+    # θ (with z_0 = R(1 − cos θ₁) the maximum sinkage) is
+    #
+    #     z(θ) = R·(cos θ − cos θ₁)                              (i)
+    #
+    # Substituting (i) into Bekker's p(z) = k_eff · z^n gives the
+    # **front region** (θ_m ≤ θ ≤ θ₁) stress:
+    #
+    #     σ₁(θ) = k_eff · R^n · (cos θ − cos θ₁)^n              (ii)
+    #
+    # The **rear region** (0 ≤ θ < θ_m) re-uses the same shape but
+    # with an angular remap θ★ = θ★(θ) that linearly maps
+    # [0, θ_m] → [θ₁, θ_m]:
+    #
+    #     θ★(θ) = θ₁ − (θ/θ_m)·(θ₁ − θ_m)                      (iii)
+    #     σ₂(θ) = k_eff · R^n · (cos θ★ − cos θ₁)^n            (iv)
+    #
+    # Check: θ★(0) = θ₁ ⇒ σ₂(0) = 0 (vanishes at exit); θ★(θ_m) = θ_m
+    # ⇒ σ₂ matches σ₁ at the transition, so the composite σ(θ) is
+    # continuous.
+    arg_front = np.maximum(cos_theta - cos_theta_1, 0.0)  # (ii) — max for numerics
     sigma_front = k_eff * radius_m**n * arg_front**n
 
     if theta_m > 0.0:
-        ratio = theta / theta_m
-        theta_mapped = theta_1 - ratio * (theta_1 - theta_m)
-        arg_rear = np.maximum(np.cos(theta_mapped) - cos_theta_1, 0.0)
-        sigma_rear = k_eff * radius_m**n * arg_rear**n
+        theta_star = theta_1 - (theta / theta_m) * (theta_1 - theta_m)  # (iii)
+        arg_rear = np.maximum(np.cos(theta_star) - cos_theta_1, 0.0)
+        sigma_rear = k_eff * radius_m**n * arg_rear**n  # (iv)
     else:
         sigma_rear = np.zeros_like(theta)
 
     sigma = np.where(theta >= theta_m, sigma_front, sigma_rear)
 
-    # Shear deformation j(θ) under rolling-with-slip kinematics (Wong).
-    # Positive for driving (slip > 0); the tan-function shape of
-    # Janosi-Hanamoto uses the magnitude of j, and the sign of the
-    # resulting shear stress follows the sign of j.
+    # -----------------------------------------------------------------
+    # Kinematic shear displacement j(θ)   (Wong & Reece 1967; Wong 2008 §4.2)
+    # -----------------------------------------------------------------
+    # With slip ratio  s = 1 − V/(Rω)  (positive for driving):
+    #
+    #     j(θ) = R · [(θ₁ − θ) − (1 − s)·(sin θ₁ − sin θ)]       (v)
+    #
+    # Physical meaning: j is the accumulated tangential displacement
+    # of a soil particle relative to the wheel surface, measured from
+    # the moment the particle is engaged at θ = θ₁.
+    # Checks:
+    #   - j(θ₁) = 0                                           (entry)
+    #   - At s = 1 (pure skid), j(θ) = R(θ₁ − θ) (maximal slip length)
+    #   - At s = 0 (no slip), j is small but nonzero — a kinematic
+    #     rolling-shear residual. See project_log.md for the DP(0)
+    #     sign-subtlety discussion.
     j = radius_m * ((theta_1 - theta) - (1.0 - slip) * (math.sin(theta_1) - sin_theta))
 
-    # Janosi-Hanamoto shear stress τ(θ) = τ_max (1 − e^(−|j|/K)) sgn(j).
+    # -----------------------------------------------------------------
+    # Shear stress τ(θ)   (Janosi & Hanamoto 1961; Wong 2008 eq. 2.39)
+    # -----------------------------------------------------------------
+    # Mohr-Coulomb strength envelope:
+    #
+    #     τ_max(θ) = c + σ(θ)·tan φ                             (vi)
+    #
+    # Janosi-Hanamoto exponential mobilisation with shear modulus K:
+    #
+    #     τ(θ) = τ_max · (1 − exp(−|j|/K)) · sgn(j)             (vii)
+    #
+    # The sgn(j) factor is a minor extension of the original (1961)
+    # paper — it lets the same formula handle the driving (j > 0) and
+    # braking (j < 0) cases with a single expression.
     tau_max = cohesion_pa + sigma * math.tan(phi_rad)
     tau = tau_max * (1.0 - np.exp(-np.abs(j) / shear_modulus_m)) * np.sign(j)
 
-    # Force integrals (Wong eq. 4.24–4.26).
-    integrand_w = sigma * cos_theta + tau * sin_theta
-    integrand_dp = tau * cos_theta - sigma * sin_theta
-    integrand_t = tau
+    # -----------------------------------------------------------------
+    # Force integrals   (Wong 2008 §4.2)
+    # -----------------------------------------------------------------
+    # Sign-convention derivation (in wheel-axle frame, x̂ forward,
+    # ŷ upward, θ measured from downward vertical, positive forward):
+    #
+    #   Outward unit normal on the wheel at angle θ:
+    #       n̂(θ) = ( sin θ, −cos θ)                             (down-forward)
+    #
+    #   Soil exerts a compressive (inward) normal reaction on the
+    #   wheel, so the force per unit area from soil on wheel is
+    #       σ⃗ = −σ·n̂ = σ·(−sin θ, +cos θ).
+    #
+    #   Tangent-in-rotation-direction at the contact surface:
+    #       t̂(θ) = (−cos θ, −sin θ)                             (backward-down)
+    #
+    #   For driving slip (s > 0) the wheel surface moves backward
+    #   relative to the soil, so soil reacts on the wheel in the
+    #   +forward direction, i.e. in −t̂. Defining τ > 0 as tractive:
+    #       τ⃗ = −τ·t̂ = τ·(+cos θ, +sin θ).
+    #
+    # Summing horizontal and vertical components of σ⃗ + τ⃗ and
+    # integrating over the contact arc (arc element R dθ, contact
+    # width b) gives Wong's standard form:
+    #
+    #     W  = b·R ∫[0,θ₁] (σ cos θ + τ sin θ) dθ              (viii)
+    #     DP = b·R ∫[0,θ₁] (τ cos θ − σ sin θ) dθ               (ix)
+    #     T  = b·R² ∫[0,θ₁]  τ             dθ                    (x)
+    #
+    # For (x) the extra R is the moment arm about the wheel axle.
+    integrand_w = sigma * cos_theta + tau * sin_theta  # (viii)
+    integrand_dp = tau * cos_theta - sigma * sin_theta  # (ix)
+    integrand_t = tau  # (x)
 
     scale = width_m * radius_m
     vertical_load = scale * float(np.trapezoid(integrand_w, theta))
@@ -196,13 +313,24 @@ def _integrate_forces(
 def _compaction_resistance(sinkage_m: float, wheel: WheelGeometry, soil: SoilParameters) -> float:
     """Bekker plate compaction resistance, reported as a diagnostic.
 
+    Derivation (Bekker 1969; Wong 2008 §3.4): the work per unit
+    forward distance required to compact the soil under a plate of
+    width ``b`` from depth 0 to ``z_0`` is
+
     .. math::
 
-        R_c = b \\int_0^{z_0} p(z) \\, dz
-            = \\frac{b\\,(k_c/b + k_\\phi)}{n+1}\\, z_0^{n+1}
+        R_c = b \\int_0^{z_0} p(z)\\, dz
+            = \\frac{b\\,(k_c/b + k_\\phi)}{n+1}\\, z_0^{\\,n+1}
 
-    At slip = 0 the integrated drawbar pull should be approximately
-    ``-R_c`` (pure compaction drag), which we assert in the tests.
+    which, multiplied by speed, equals the power dissipated in
+    compaction. ``R_c`` is therefore a "motion resistance" with units
+    of force.
+
+    In the rigid-wheel rolling model this is not identically equal to
+    ``−DP`` at ``s = 0`` because the integrated DP also picks up the
+    kinematic-shear contribution from τ(θ) at zero slip (see discussion
+    in the module docstring and ``project_log.md``). For realistic
+    lunar per-wheel loads the two agree in magnitude to ~15 %.
     """
     if sinkage_m <= 0.0:
         return 0.0
@@ -223,10 +351,12 @@ def single_wheel_forces(
 ) -> WheelForces:
     """Compute steady-state drawbar pull, torque, and sinkage for one wheel.
 
-    The entry angle θ₁ is found by root-finding on the vertical-force
-    residual (integrated W equals the applied load). All outputs are in
-    SI units regardless of the soil-parameter unit conventions in the
-    CSV catalogue.
+    Solves the vertical force-balance equation implicitly for the
+    entry angle θ₁ using Brent's method. Given θ₁ the sinkage is
+    ``z_0 = R(1 − cos θ₁)`` (Wong 2008 §4.2) and the remaining
+    quantities follow from the σ/τ integrals in :func:`_integrate_forces`.
+
+    All outputs are in SI units regardless of the CSV parameter units.
 
     Parameters
     ----------
@@ -263,6 +393,10 @@ def single_wheel_forces(
         w, _, _ = _integrate_forces(theta_1, wheel, soil, slip)
         return w - vertical_load_n
 
+    # Bracket θ₁ ∈ (0, π/2). At θ₁ → 0 the contact patch vanishes so
+    # W → 0 < load (negative residual); at θ₁ → π/2 the wheel is half
+    # buried and W is very large (positive residual). brentq locates
+    # the sign change in O(log) steps.
     theta_low = 1e-5
     theta_high = math.pi / 2.0 - 1e-4
     try:
@@ -279,7 +413,7 @@ def single_wheel_forces(
         ) from exc
 
     _, drawbar_pull, torque = _integrate_forces(theta_1, wheel, soil, slip)
-    sinkage = wheel.radius_m * (1.0 - math.cos(theta_1))
+    sinkage = wheel.radius_m * (1.0 - math.cos(theta_1))  # z_0 = R(1 − cos θ₁)
     rolling_resistance = _compaction_resistance(sinkage, wheel, soil)
 
     return WheelForces(
