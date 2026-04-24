@@ -134,7 +134,7 @@ Each sub-model needs to be (a) implementable from a published source, (b) testab
 
 **Battery.** Simple SOC tracking with charge/discharge efficiency, depth-of-discharge limits, and a temperature-derating factor. Lithium-ion at lunar temperatures has published curves (NASA Glenn reports). Validation: confirm a 100 Wh battery delivers ~85 Wh usable, etc.
 
-**Mass model.** Parametric mass estimating relationships for chassis, wheels, motors, solar panels, battery, harness, structure. Most MERs come from proprietary databases; the publishable version builds MERs from the small set of published lunar micro-rovers (Rashid, Pragyan, Yutu-1/2, CADRE, Sojourner, MARSOKHOD prototypes, Lunokhod). n=8 is small. Document this explicitly as a limitation. The point of the surrogate isn't to predict mass to ±1% — it's to capture the *trends* (bigger wheels weigh more in a known way).
+**Mass model.** Bottom-up parametric mass model: each subsystem (wheels, motors+drives, solar panels, battery, avionics, harness, thermal, margin) is computed from a physics-grounded specific mass or a standard spacecraft-sizing fraction taken from SMAD, AIAA S-120A-2015, and vendor catalogues (Maxon/Faulhaber for motors, Spectrolab/AzurSpace for solar, NASA Glenn for Li-ion pack specific energy). Chassis mass enters as a design variable. The small set of published lunar micro-rovers (Rashid, Pragyan, Yutu-1/2, CADRE, Sojourner, MARSOKHOD prototype, ExoMy, Lunokhod) is used as a **validation set, not training data** — target is median absolute error ≤30% on in-class (5–50 kg) rovers. We deliberately avoid regressing per-subsystem masses on n≈8 heterogeneous rovers because (a) per-subsystem mass breakdowns aren't published for most of them and (b) the sample spans 2 kg to 756 kg across 50 years of technology, which makes any regression dominated by a handful of leverage points. The bottom-up approach keeps every coefficient individually citable (which also enables sensitivity sweeps of those coefficients in the surrogate layer).
 
 **Traverse simulator.** A simple time-stepped loop: at each step, compute power generated (solar geom), power consumed (rolling resistance from terramechanics + avionics + thermal heaters), update battery SOC, advance position by `v × dt × δ`, check survival constraints, log everything. Run for the mission duration. This is ~300 lines of Python. Validation: run with Yutu-2 parameters and check that the predicted daily traverse distance is in the right ballpark compared to published actuals.
 
@@ -175,11 +175,11 @@ This three-path structure makes the project robust on a laptop. If PyChrono neve
 - **Hard gate:** if PyChrono isn't running by Friday, commit to Path 1 + Path 3 only and document the decision in the project log. Don't keep fighting it.
 - **Deliverable:** `power/solar.py`, `power/battery.py`, PyChrono decision recorded.
 
-**Week 3: Mass model and parametric MERs.**
-- Build a small database of published lunar micro-rover specs (Rashid, Pragyan, Yutu-1/2, CADRE, Sojourner, Lunokhod, plus 1–2 academic concepts). Spreadsheet with mass breakdown by subsystem.
-- Fit simple parametric MERs (linear or power-law) for each subsystem mass as a function of design variables.
-- Document the small-n caveat explicitly in `mass_model.py` docstring.
-- **Deliverable:** `mass_model.py` + `data/published_rovers.csv` with citations.
+**Week 3: Bottom-up mass model and published-rover validation set.**
+- Build a small database of published lunar micro-rover specs (Rashid, Pragyan, Yutu-1/2, CADRE, Sojourner, Lunokhod, plus 1–2 academic concepts) in `data/published_rovers.csv`.
+- Implement a bottom-up mass model (`mass/parametric_mers.py`): per-subsystem mass from specific-mass constants cited to SMAD / AIAA S-120A / vendor catalogues, assembled via SMAD-style harness / thermal / margin fractions, with the motor subsystem sized to peak wheel torque by fixed-point iteration. Expose every coefficient through a `MassModelParams` dataclass so it can be swept in sensitivity studies.
+- Curate a gap-filled design-vector validation set (`data/mass_validation_set.csv`) with imputation notes for every non-published field; run the bottom-up model against it and require **median absolute error ≤30% on in-class (5–50 kg) rovers**.
+- **Deliverable:** `mass/parametric_mers.py`, `mass/validation.py`, `data/published_rovers.csv`, `data/mass_validation_set.csv`, all with citations and a test gate enforcing the 30% validation target.
 
 **Week 4: Mission traverse simulator.**
 - Time-stepped traverse loop integrating terramechanics + power + battery + mass.
@@ -287,7 +287,7 @@ The paper's credibility depends on a layered validation approach. Each layer add
 
 ### Layer 6: Sensitivity and Robustness Analysis
 **Question:** Are the tradespace conclusions robust to model uncertainty?
-**Method:** Perturb soil parameters and MER coefficients by ±20%, re-run optimization, check if qualitative conclusions persist.
+**Method:** Perturb soil parameters and `MassModelParams` specific-mass coefficients by ±20%, re-run optimization, check if qualitative conclusions persist.
 **Expected result:** Qualitative conclusions stable, exact optimal dimensions shift.
 
 ---
@@ -297,8 +297,8 @@ The paper's credibility depends on a layered validation approach. Each layer add
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | PyChrono fails to install or SCM doesn't work on M2 | Medium | Medium | Path 2 becomes optional; paper still works with Path 1 + Path 3. Gate at end of week 2. |
-| Mission evaluator can't reproduce real rover behavior in Week 5 | Medium | High | Most likely cause is mass model — the n=8 MER fits will be loose. Mitigation: report parametric sensitivity to MER assumptions; loosen tolerances on the rediscovery validation. If still bad, narrow scope to mobility-power tradespace only and drop the "rediscover real rovers" framing. |
-| Published rover specs are too sparse to fit MERs | Low | Medium | Augment with academic concept rovers and JPL/ESA published study reports. CADRE and VIPER design papers are particularly useful. |
+| Mission evaluator can't reproduce real rover behavior in Week 5 | Medium | High | Most likely cause is the mass-model calibration of specific-mass constants outside the 5–50 kg class. Mitigation: report parametric sensitivity to `MassModelParams` coefficients; loosen tolerances on the rediscovery validation. If still bad, narrow scope to mobility-power tradespace only and drop the "rediscover real rovers" framing. |
+| Published-rover validation set is too sparse to cover every subsystem | Low | Medium | Augment with academic concept rovers, JPL/ESA published study reports, and the CADRE/VIPER design papers; impute the remaining fields with clearly marked rules-of-thumb in `mass_validation_set.csv`. |
 | Surrogate accuracy too low on mission-level metrics | Low | Medium | Mission metrics are smoother than wheel-level metrics, so this is less of a risk than in a wheel-only project. If it happens, narrow the design space or add more training data. |
 | SHAP design rules turn out to be obvious / boring | Medium | Low | Frame the contribution as "first quantitative validation of engineering intuition" rather than "novel design insights." Still publishable. |
 | Reviewers say "this is just systems engineering with a fancier search algorithm" | Medium | Medium | Lean hard on (a) the open-source tool contribution, (b) the rediscovery validation, (c) the multi-fidelity training methodology. Don't oversell the ML novelty — the contribution is integration and validation, not new ML methods. |
@@ -339,7 +339,8 @@ roverdevkit/
 │   │   └── thermal.py                # Lumped-parameter survival check
 │   │
 │   ├── mass/
-│   │   └── parametric_mers.py        # MERs from published rovers
+│   │   ├── parametric_mers.py        # Bottom-up physics + specific-mass model
+│   │   └── validation.py             # Cross-check vs data/mass_validation_set.csv
 │   │
 │   ├── mission/
 │   │   ├── evaluator.py              # Top-level mission evaluator
@@ -431,10 +432,10 @@ RoverDevKit: ML-Accelerated Co-Design of Mobility and Power for Lunar Micro-Rove
 ### 6. Validation Against Real Rovers
 - 6.1 Mission evaluator vs published rover traverse data
 - 6.2 Rediscovery test: optimizer vs Rashid, Pragyan
-- 6.3 Sensitivity to MER and soil parameter uncertainty
+- 6.3 Sensitivity to `MassModelParams` and soil parameter uncertainty
 
 ### 7. Discussion
-- 7.1 Limitations: MER small-n, SCM fidelity, gravity scaling, thermal simplification
+- 7.1 Limitations: specific-mass calibration range (5–50 kg), SCM fidelity, gravity scaling, thermal simplification
 - 7.2 When to trust the surrogate vs when to run full evaluator
 - 7.3 Implications for real mission design
 - 7.4 Comparison with existing trade study tools

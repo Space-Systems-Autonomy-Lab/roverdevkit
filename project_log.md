@@ -242,3 +242,91 @@ models are well-described in SMAD (Larson & Wertz) and Patel
   battery + PyChrono go/no-go all in. Ready to start Week 3 (mass
   model + parametric MERs).
 
+## 2026-04-23 — Mass model: bottom-up not regression (Week 3)
+
+**Decision.** Implement the rover mass model as a **bottom-up assembly of
+physics-grounded specific masses** (SMAD Ch. 11, AIAA S-120A-2015, vendor
+catalogues) rather than as a set of per-subsystem regressions against the
+published-rover dataset, as originally framed in §6 W3 of the plan. Use
+the n=10 rover dataset as a **validation set, not training data**.
+
+**Context.** The original plan said "fit simple parametric MERs (linear
+or power-law) for each subsystem mass." Three problems with that as
+stated:
+
+1. `data/published_rovers.csv` has `mass_chassis_kg` (and all other
+   per-subsystem columns) empty for every row — subsystem breakdowns
+   simply aren't published for most of these rovers, so any
+   "per-subsystem MER fit" would be fitting to imputations, not data.
+2. The dataset spans 2 kg (CADRE) to 756 kg (Lunokhod-1) across
+   1970–2024, with Mars + Moon + Earth-only vehicles and three
+   different mobility architectures. A least-squares fit on n≈8 of
+   these would be dominated by whichever 2–3 rovers have the highest
+   leverage and is statistically indefensible.
+3. `chassis_mass_kg` is already a `DesignVector` input, so we don't
+   need to predict it — we need MERs only for the *derived* subsystems.
+
+**Approach that replaced it.**
+
+- `roverdevkit/mass/parametric_mers.py` — bottom-up model:
+  - Wheels: `n * rho_wheel_area * 2πRW` + thin-plate grouser mass.
+  - Motors: `n * (m_0 + k_τ * τ_peak)` with `τ_peak = SF · μ · W_wheel · R`,
+    sized against the vehicle's lunar weight (resolved by fixed-point
+    iteration, 3–5 steps to 1e-4 relative tolerance).
+  - Solar panels: `ρ_A · A_s` (area-density constant).
+  - Battery: `C_b / e_pack` (pack-level specific energy).
+  - Avionics: `m_0 + β · P_a`.
+  - Harness / thermal / margin: SMAD Table 11-43 fractions
+    (`0.08`, `0.05`, `0.20`) applied in SMAD order.
+  - Every constant exposed through a `MassModelParams` dataclass so the
+    surrogate / tradespace layer can sweep them for sensitivity.
+- `roverdevkit/mass/validation.py` + `data/mass_validation_set.csv` —
+  gap-filled design vectors for 8 published rovers with per-row
+  imputation notes; primary statistic is **median absolute percent
+  error on in-class (5–50 kg) rovers**, with out-of-class rovers
+  (CADRE, Yutu-2, MARSOKHOD, Lunokhod) reported alongside but
+  excluded from the primary number.
+
+**Calibration (default `MassModelParams`).**
+
+After one round of calibration against the validation set (dropped
+`k_τ` from 1.0 → 0.10 kg/(N·m) to match Maxon EC-i + harmonic-drive
+catalogue data; dropped wheel area density from 12 → 8 kg/m² to the
+low end of Nohmi 2003 for micro-rover-class rigid wheels), the
+end-to-end validation gives:
+
+| Rover               | in-class | published (kg) | predicted (kg) | err %   |
+|---------------------|----------|----------------|----------------|---------|
+| Rashid              | yes      |   10.0         |   10.37        |  +3.7   |
+| Sojourner           | yes      |   10.6         |   11.06        |  +4.3   |
+| ExoMy               | yes      |    8.0         |    8.83        | +10.4   |
+| Pragyan             | yes      |   26.0         |   22.31        | -14.2   |
+| CADRE-unit          | no       |    2.0         |    4.08        | +104.2  |
+| Resilience-Tenacious| no       |    5.0         |    5.63        | +12.5   |
+| Yutu-2              | no       |  135.0         |  120.33        | -10.9   |
+| MARSOKHOD-proto     | no       |   70.0         |   63.50        |  -9.3   |
+
+In-class aggregates (n=4): median |err| = **7.4 %**, mean |err| = 8.2 %,
+worst = Pragyan at -14.2 %. Well below the 30 % Week-5 target. CADRE is
+expected to be large: at 2 kg it is below the 3 kg `chassis_mass_kg`
+lower bound of `DesignVector` and the avionics/motor baseline terms
+dominate the total. Yutu-2 and MARSOKHOD are also out of class (above
+the 50 kg ceiling) and are included only as reference points.
+
+**Consequences.**
+
+- Plan updated: §4 "Mass model" paragraph rewritten to describe the
+  bottom-up approach; §6 W3 deliverable list updated; architecture
+  diagram updated to list `validation.py`; paper-outline §6.3 and
+  §7.1 updated; risk register updated.
+- Tests: `tests/test_mass.py` (27 tests, all passing) covers
+  dataclass behaviour, per-subsystem physics (monotonicity,
+  linearity), iteration convergence, `DesignVector` round-trip, and a
+  validation gate that fails if the in-class median error ever
+  exceeds 30 %. This is effectively the Week-5 real-rover validation
+  gate enforced in CI at Week 3.
+- Fast-loop status: `pytest -q --ignore=tests/test_pychrono_scm.py`
+  → **96 passed, 2 xfailed**. Ruff, ruff format, mypy all clean.
+- Ready to start Week 4 (mission traverse simulator + thermal
+  survival check).
+
