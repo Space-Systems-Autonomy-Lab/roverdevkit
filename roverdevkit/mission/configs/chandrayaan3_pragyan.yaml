@@ -1,0 +1,19 @@
+# Validation scenario — Chandrayaan-3 Pragyan mission (ISRO, 2023).
+# Not a canonical tradespace scenario; used only by
+# roverdevkit/validation/rover_registry.py for the real-rover
+# cross-check.
+#
+# Source: ISRO Chandrayaan-3 press materials (landing 23 Aug 2023) and
+# Scientific Reports (Nature) 14:24178 (2024) for landing coordinates
+# 69.37 S, 32.35 E. Pragyan operated through a single lunar day
+# (~14 Earth days) and failed to reawaken after lunar night. Published
+# in-mission traverse distance ~101.4 m over ~10 active Earth days.
+name: chandrayaan3_pragyan
+latitude_deg: -69.4
+traverse_distance_m: 500.0         # soft cap; published actual ~101 m
+terrain_class: polar_regolith
+soil_simulant: Apollo_regolith_loose
+mission_duration_earth_days: 14.0   # one lunar day, hot case
+max_slope_deg: 5.0                  # typical-ops mean; Pragyan stayed on near-flat terrain
+
+sun_geometry: polar_intermittent

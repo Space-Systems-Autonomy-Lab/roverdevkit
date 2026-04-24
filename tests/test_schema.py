@@ -43,7 +43,7 @@ def test_design_vector_rejects_invalid_wheel_count() -> None:
             wheel_width_m=0.06,
             grouser_height_m=0.005,
             grouser_count=12,
-            n_wheels=5,  # only 4 or 6 allowed
+            n_wheels=5,  # type: ignore[arg-type]  # only 4 or 6 allowed
             chassis_mass_kg=6.0,
             wheelbase_m=0.35,
             solar_area_m2=0.4,
@@ -56,7 +56,7 @@ def test_design_vector_rejects_invalid_wheel_count() -> None:
 
 def test_design_vector_is_immutable(rashid_like_design: DesignVector) -> None:
     with pytest.raises(ValidationError):
-        rashid_like_design.wheel_radius_m = 0.2  # type: ignore[misc]
+        rashid_like_design.wheel_radius_m = 0.2
 
 
 def test_scenario_round_trips_through_json(equatorial_scenario: MissionScenario) -> None:

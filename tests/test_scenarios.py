@@ -24,7 +24,7 @@ def test_list_scenarios_returns_all_four_canonical_scenarios() -> None:
 
 @pytest.mark.parametrize("name", sorted(EXPECTED_SCENARIOS))
 def test_load_scenario_round_trips_to_pydantic_model(name: str) -> None:
-    scenario = load_scenario(name)  # type: ignore[arg-type]
+    scenario = load_scenario(name)
     assert isinstance(scenario, MissionScenario)
     assert scenario.name == name
 
@@ -34,13 +34,13 @@ def test_soil_simulant_in_every_scenario_is_in_the_catalogue(name: str) -> None:
     # The traverse sim resolves soil names via the catalogue; if a
     # scenario references an unknown simulant the evaluator will crash
     # later. Catch it at config-load time.
-    scenario = load_scenario(name)  # type: ignore[arg-type]
+    scenario = load_scenario(name)
     assert scenario.soil_simulant in list_soil_simulants()
 
 
 def test_unknown_scenario_raises_file_not_found() -> None:
     with pytest.raises(FileNotFoundError, match="scenario config"):
-        load_scenario("nonexistent_scenario")  # type: ignore[arg-type]
+        load_scenario("nonexistent_scenario")
 
 
 def test_equatorial_scenario_has_expected_fields() -> None:

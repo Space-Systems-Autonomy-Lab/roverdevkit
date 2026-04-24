@@ -76,7 +76,7 @@ def test_slope_capability_within_schema_bounds(
 @pytest.mark.integration
 @pytest.mark.parametrize("name", sorted(list_scenarios()))
 def test_evaluator_runs_on_every_scenario(rashid_like_design: DesignVector, name: str) -> None:
-    scenario = load_scenario(name)  # type: ignore[arg-type]
+    scenario = load_scenario(name)
     metrics = evaluate(rashid_like_design, scenario)
     assert metrics.total_mass_kg > 0.0
     assert metrics.range_km >= 0.0

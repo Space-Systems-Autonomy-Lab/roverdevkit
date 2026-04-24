@@ -1,0 +1,23 @@
+# Validation scenario — Mars Pathfinder Sojourner traverse (NASA/JPL 1997).
+# Not a canonical tradespace scenario; used only by
+# roverdevkit/validation/rover_registry.py for the Week 5 real-rover
+# cross-check.
+#
+# Source: Wilcox & Nguyen 1998, IEEE Aerospace; Matijevic et al. 1997,
+# Science 278:1765-1768. Sojourner traversed ~100 m cumulatively over
+# ~83 sols at Ares Vallis (19.13 N, 33.22 W), driving only a small
+# fraction of each sol.
+#
+# IMPORTANT gravity caveat: this scenario is evaluated using Mars
+# gravity (3.71 m/s^2) rather than lunar (1.625 m/s^2). The evaluator
+# takes gravity as a keyword. All other mission parameters are
+# Mars-specific, so this case doubles as a gravity-scaling sanity
+# check on the mass and terramechanics models.
+name: mpf_sojourner_ares_vallis
+latitude_deg: 19.13
+traverse_distance_m: 150.0
+terrain_class: mare_nominal
+soil_simulant: GRC-1
+mission_duration_earth_days: 85.0
+max_slope_deg: 5.0                  # typical-ops; Sojourner avoided >10 deg terrain
+sun_geometry: diurnal

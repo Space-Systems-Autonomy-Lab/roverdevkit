@@ -43,6 +43,7 @@ Design notes
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import numpy as np
@@ -108,6 +109,7 @@ def evaluate(
     *,
     mass_params: MassModelParams | None = None,
     thermal_architecture: ThermalArchitecture | None = None,
+    gravity_m_per_s2: float | None = None,
     use_scm_correction: bool = False,
 ) -> MissionMetrics:
     """Run the full mission evaluator on one design in one scenario.
@@ -125,6 +127,11 @@ def evaluate(
         Optional override. If ``None``, a default enclosure is built
         from a fraction of the chassis using
         :func:`default_architecture_for_design`.
+    gravity_m_per_s2
+        Surface gravity override. Defaults to
+        ``mass_params.gravity_moon_m_per_s2`` (lunar). Used by the
+        Week-5 validation harness to evaluate Sojourner under Mars
+        gravity; normal tradespace calls should leave this None.
     use_scm_correction
         If True, apply the learned Bekker-Wong -> SCM correction
         (Path 2). Requires the correction model to be loaded. Default
@@ -139,6 +146,13 @@ def evaluate(
         raise NotImplementedError("SCM correction path is wired in Week 7 (project_plan.md §6).")
 
     mass_params = mass_params or MassModelParams()
+    # If the caller overrides gravity, rebuild mass_params so the mass
+    # model sizes motors against the correct planetary weight.
+    if gravity_m_per_s2 is not None and not math.isclose(
+        gravity_m_per_s2, mass_params.gravity_moon_m_per_s2
+    ):
+        mass_params = dataclasses.replace(mass_params, gravity_moon_m_per_s2=gravity_m_per_s2)
+    active_g = mass_params.gravity_moon_m_per_s2
 
     # 1. Mass model.
     breakdown: MassBreakdown = estimate_mass_from_design(design, params=mass_params)
@@ -175,7 +189,7 @@ def evaluate(
         soil,
         total_mass_kg=total_mass_kg,
         n_wheels=design.n_wheels,
-        gravity_m_per_s2=mass_params.gravity_moon_m_per_s2,
+        gravity_m_per_s2=active_g,
     )
 
     # 5. Traverse.
@@ -184,7 +198,7 @@ def evaluate(
         scenario,
         soil,
         total_mass_kg=total_mass_kg,
-        gravity_m_per_s2=mass_params.gravity_moon_m_per_s2,
+        gravity_m_per_s2=active_g,
     )
 
     # 6. Aggregate.
@@ -196,6 +210,7 @@ def evaluate(
     torque_ceiling = _sizing_peak_torque_nm(
         total_mass_kg, design.wheel_radius_m, design.n_wheels, mass_params
     )
+    _ = active_g  # documents that gravity flows through mass_params above
     motor_torque_ok = bool(peak_torque_nm <= torque_ceiling) and not log.rover_stalled
 
     # Guard against NaN/inf creeping out of any sub-model; cap to safe

@@ -1,0 +1,25 @@
+# Validation scenario — Chang'e-4 Yutu-2 single-lunar-day drive window.
+# Not a canonical tradespace scenario; used only by
+# roverdevkit/validation/rover_registry.py for the Week 5 real-rover
+# cross-check.
+#
+# Source: Di et al. 2020, Icarus; Ding et al. 2022, Acta Astronautica;
+# CNSA mission dispatches. Yutu-2 landed 2019-01-03 at 45.5 N on the
+# lunar far side (Von Karman crater) and has driven ~1.6 km cumulatively
+# over 60+ lunar days. Published per-lunar-day drive distances from
+# the first year range ~20-30 m; we treat that as the truth number the
+# model must reproduce for *one* lunar-day active window.
+#
+# Rationale for the reduced mission_duration_earth_days: Yutu-2's drive
+# operations are concentrated into a few Earth-day activity window per
+# lunar day (not all 14). By setting the sim window to 5 days of active
+# ops we approximate the drive schedule without needing a proper
+# hibernation model (that is v2 work per traverse_sim.py docstring).
+name: change4_yutu2_per_lunar_day
+latitude_deg: 45.5
+traverse_distance_m: 200.0
+terrain_class: mare_nominal
+soil_simulant: Apollo_regolith_nominal
+mission_duration_earth_days: 5.0
+max_slope_deg: 5.0                  # typical-ops mean across Yutu-2's Von Karman traverse
+sun_geometry: diurnal

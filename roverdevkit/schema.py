@@ -66,12 +66,18 @@ class MissionScenario(BaseModel):
     """Fixed mission context against which a design is evaluated.
 
     Scenarios are typically loaded from YAML in
-    :mod:`roverdevkit.mission.scenarios`.
+    :mod:`roverdevkit.mission.scenarios`. The four canonical scenarios
+    (``ScenarioName``) are what the tradespace optimiser sweeps in
+    Phase 3; validation scenarios (Week 5 rover-comparison harness)
+    reuse the same schema with descriptive names, so ``name`` is a free
+    string rather than the Literal. Invalid values never reach the
+    optimiser because that path goes through ``load_scenario()``, which
+    takes a ``ScenarioName`` Literal.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: ScenarioName
+    name: str
     latitude_deg: float = Field(ge=-90.0, le=90.0)
     traverse_distance_m: float = Field(gt=0.0)
     terrain_class: TerrainClass

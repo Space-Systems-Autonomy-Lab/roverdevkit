@@ -22,12 +22,24 @@ from roverdevkit.schema import MissionScenario, ScenarioName
 
 SCENARIO_DIR: Path = Path(__file__).parent / "configs"
 
+_CANONICAL_NAMES: set[str] = {
+    "equatorial_mare_traverse",
+    "polar_prospecting",
+    "highland_slope_capability",
+    "crater_rim_survey",
+}
+"""Canonical tradespace scenarios that `list_scenarios` returns.
+
+Validation-only scenarios (Week 5 real-rover cross-check) also live in
+:data:`SCENARIO_DIR` but are excluded from the tradespace listing so
+Phase-3 sweeps never accidentally pick them up."""
+
 
 def _config_path(name: str) -> Path:
     return SCENARIO_DIR / f"{name}.yaml"
 
 
-def load_scenario(name: ScenarioName) -> MissionScenario:
+def load_scenario(name: str) -> MissionScenario:
     """Load a named canonical scenario from its YAML config.
 
     Parameters
@@ -61,16 +73,15 @@ def load_scenario(name: ScenarioName) -> MissionScenario:
 
 
 def list_scenarios() -> list[ScenarioName]:
-    """List every scenario YAML that ships with the package.
+    """List the canonical tradespace scenarios that ship with the package.
 
-    Returned as a list of :data:`ScenarioName` literals; every element is
-    guaranteed loadable by :func:`load_scenario`.
+    Validation-only scenarios (e.g. ``chandrayaan3_pragyan``) are kept
+    out of this list so Phase-3 sweeps never pick them up. Returned as
+    a list of :data:`ScenarioName` literals; every element is guaranteed
+    loadable by :func:`load_scenario`.
     """
-    # cast: ScenarioName is a Literal, but the YAML filenames on disk are
-    # the source of truth. We validate by round-tripping through
-    # MissionScenario when a scenario is actually loaded; here we just
-    # surface what's on disk.
+    on_disk = {p.stem for p in SCENARIO_DIR.glob("*.yaml")}
     return cast(
         "list[ScenarioName]",
-        sorted(p.stem for p in SCENARIO_DIR.glob("*.yaml")),
+        sorted(on_disk & _CANONICAL_NAMES),
     )
