@@ -768,3 +768,77 @@ even if Path 2 falls over.
   needed for "cheap regeneration" -- that branch was architecturally
   unnecessary once the composed-surrogate framing was made explicit.
 
+## 2026-04-24 — Paper strategy: refined framing + Phase-5 benchmark release
+
+**Decision.** Refine Paper 1's framing from "ML-accelerated co-design of
+rovers" to a methodology-forward pitch centered on two generalisable
+contributions: (a) the multi-fidelity decomposition architecture with
+separately-attributable error sources, and (b) the capability-envelope
+vs operational-utilisation framework. Keep the open-source tool and
+the rediscovery test as the other two contributions. Add Phase 5
+(Weeks 16-19, post-semester) for a follow-on "RoverBench" dataset +
+benchmark release as Paper 2 at NeurIPS Datasets & Benchmarks, IEEE
+RA-L, or ICRA benchmark track.
+
+**Context.** §11 as originally written put "open-source tool" as
+contribution #1 and the multi-fidelity methodology as #2, which
+undersold the most genuinely novel piece. The Week-5.6 capability-
+envelope work is also a real conceptual contribution the field hasn't
+formalised in the open literature (JPL Team X / ESA CDF do this
+distinction but it's not cited anywhere outside proprietary practice),
+and it was buried in a limitations section. Promoting both to headline
+status opens up methodology venues (JFR, IJRR, TASE) alongside the
+original aerospace venues (JSR, Acta Astronautica, IEEE Aerospace).
+
+Separately, the 40 k LHS dataset + canonical train/val/test split +
+pretrained surrogate we produce as Paper-1 byproducts are all the raw
+material for a benchmark release. Three tiny hooks in Week 6
+(canonical split stored as a parquet column, `benchmark_score` public
+helper, `SCHEMA.md`) make the Phase-5 release packaging work rather
+than retrofitting. Added those hooks to the Week-6 deliverables.
+
+**What changed in `project_plan.md`.**
+
+- §11 replaced: two-paper strategy with explicit priority-ordered
+  contributions, null-result framing for both W7.5 gate outcomes,
+  and a tightened 10-section outline for Paper 1.
+- §11.2 added: Paper 2 (RoverBench) scope, venue, and contributions.
+  Scope deliberately narrowed to a prediction benchmark (D-narrow),
+  not a design-optimisation benchmark (D-broad) -- prediction tasks
+  pull from a much larger ML-surrogate community and have a clean,
+  ungameable scoring rubric.
+- §6 Phase 5 added (Weeks 16-19): benchmark artifacts, baselines +
+  leaderboard + submission interface, paper draft, submit. Gated at
+  Week 16 on Paper-1 submission status, dataset stability, and
+  venue window -- cleanly cancellable without affecting Paper 1.
+- §6 W6 deliverables extended with benchmark hooks: canonical split
+  column, `benchmark_score` helper, `SCHEMA.md`. Zero marginal cost
+  at generation time, high cost to retrofit later.
+- §9 rewritten to reflect the MVP-vs-full-vision split for Paper 1
+  under the new framing, plus an explicit note that Paper 2 is
+  independent of Paper 1's outcome.
+- §10 extended with new `roverbench/` subpackage layout,
+  `SCHEMA.md`, challenge-set parquet, and the surrogate-module
+  breakdown we're actually building (sampling.py, dataset.py,
+  baselines.py, metrics.py, benchmark_score.py).
+- §13 milestones extended with Week 16-19 post-semester items.
+
+**Consequences.**
+
+- The semester plan's scope is unchanged; Paper 1 remains Weeks
+  1-15. The framing change is a reorganisation, not more work.
+- The Week-6 benchmark hooks (split column, score API, schema doc)
+  are new but near-zero effort -- they add maybe two hours of
+  Week-6 work and unlock a future paper's release logistics for
+  free.
+- Phase-5 is a cancellable add-on with its own gating decision;
+  worst case we have internal infrastructure that makes future
+  surrogate work more reproducible even if the benchmark never
+  ships externally.
+- Paper 2 citation community (physics-informed ML, AutoML, ML
+  surrogates for engineering) is non-overlapping with Paper 1's
+  (robotics, aerospace systems engineering), which roughly doubles
+  reach per unit effort.
+
+
+

@@ -210,7 +210,11 @@ The original plan assumed ~50 ms per evaluation giving "50,000 LHS samples in an
 - **Baselines.** Ridge linear, random forest, XGBoost, small MLP. Multi-output across the four regression targets. 80/10/10 train/val/test split stratified by scenario.
 - **Evaluation.** Report R² / RMSE / MAPE per target, broken out both aggregate and per-scenario (catches cases where the model is great on equatorial and terrible on polar). AUC / F1 for the feasibility classifier. Plus a **registry-rover sanity check**: predict metrics for Pragyan / Yutu-2 / Sojourner against their registry design vectors and compare surrogate predictions to the evaluator's own predictions (Layer-1, not Layer-4). Guards against the surrogate doing well on IID LHS but being wrong exactly where we validate.
 - **Target accuracy (unchanged from original plan).** R² > 0.95 for range and raw energy margin; R² > 0.85 for slope capability; AUC > 0.90 for feasibility.
-- **Deliverable:** `roverdevkit/surrogate/{sampling,dataset,baselines,metrics}.py`, `data/analytical/lhs_v1.parquet` with version metadata, `notebooks/02_baseline_surrogates.ipynb` with the aggregate + per-scenario accuracy table and registry sanity check, CI gates on sampling reproducibility and a pilot-scale fit smoke test.
+- **Benchmark-release hooks (near-zero marginal cost; unlock Paper 2 cheaply).** Three design decisions to lock in at dataset-generation time so the Phase-5 benchmark release isn't a retrofit:
+  1. **Canonical train/val/test split stored as a column in the parquet** (not re-split at training time). Seeded; deterministic; the same 10% is "the test set" for every downstream paper.
+  2. **Evaluation script as a public library function**: `roverdevkit.surrogate.benchmark_score(predictions_df: pd.DataFrame) -> BenchmarkReport`. Takes predictions, returns R² / RMSE / MAPE / AUC per target and per scenario.
+  3. **Versioned schema documentation** in `data/analytical/SCHEMA.md`: columns, types, units, citations. Required for any future dataset-release paper; trivial to write at generation time, painful to retrofit.
+- **Deliverable:** `roverdevkit/surrogate/{sampling,dataset,baselines,metrics}.py` + `benchmark_score` helper, `data/analytical/lhs_v1.parquet` with version metadata and canonical split column, `data/analytical/SCHEMA.md`, `notebooks/02_baseline_surrogates.ipynb` with the aggregate + per-scenario accuracy table and registry sanity check, CI gates on sampling reproducibility, split stability, and a pilot-scale fit smoke test.
 
 **Week 7: PyChrono SCM data generation (Path 2) — if active.**
 - If PyChrono is working: write the SCM single-wheel simulation wrapper, generate 2,000 strategically-sampled SCM runs (focus on grousered wheels, high slip, sloped terrain). Use `multiprocessing` with 4–5 parallel workers, run overnight and on weekends.
@@ -270,6 +274,45 @@ The decision and its evidence go in `project_log.md`.
 
 **Week 15:** Revision, internal review, submission package.
 
+### Phase 5: Benchmark release — RoverBench (Weeks 16-19, post-semester)
+
+Phase 5 packages the Phase-2 dataset and the Phase-2/3 surrogate into a reusable benchmark with baselines, documentation, and a submission interface. The benchmark-release hooks installed in Week 6 (canonical split, `benchmark_score` helper, `SCHEMA.md`) make this phase packaging work rather than new science. Nothing in Phase 5 is on the Paper-1 critical path; the phase runs entirely post-semester and is cleanly cancellable without affecting Paper 1.
+
+**Phase-5 gating decision (start of Week 16).** Decide whether to run Phase 5 at all based on three checks:
+1. Paper 1 submitted (or at final-review stage) so benchmark release doesn't distract from it.
+2. The Week-6 dataset held up under Phase-2/3/4 scrutiny (no schema changes, no leakage discovered, no calibration errors that would force a regeneration).
+3. A plausible venue window exists (NeurIPS D&B, IEEE RA-L, ICRA benchmark track). If not, defer to the next cycle.
+
+If any check fails, park Phase 5 and revisit in the next submission cycle.
+
+**Week 16: Benchmark artifacts.**
+- Finalise the public dataset release: `data/analytical/lhs_v1.parquet` (or v2 if scaled/regenerated), with canonical split, schema doc, and per-row citation/provenance metadata.
+- Freeze the `benchmark_score` API and extend with leaderboard-quality metric computation (per-scenario, per-target, feasibility AUC, calibration score if PIs are part of the submission).
+- Add a second validation set beyond the LHS holdout: a small (~200 design) "challenge set" deliberately sampled from corners of the design space (low-mass polar, high-slope highland, extreme duty-cycle) that a good surrogate should handle but a poorly-generalising one will fail. Used as a supplementary leaderboard column.
+- **Deliverable:** `data/analytical/` with release-ready artifacts, `roverdevkit.surrogate.benchmark_score` at a frozen v1 API, challenge set generated and cached.
+
+**Week 17: Baselines, leaderboard, submission interface.**
+- Package the Paper-1 composed surrogate (analytical baseline + correction surrogate, if W7.5 chose to ship it) as `pretrained/roverbench_v1_composed.pkl` with a loader. If W7.5 went with analytical-only, that's the Paper-1 baseline.
+- Add minimal baselines for the leaderboard: linear regression, random forest, KNN (for a strong-memorization baseline), and the XGBoost baseline from Week 6. Scored against canonical split + challenge set.
+- Submission interface: a `roverbench_submit` CLI that takes a pickled model or a CSV of predictions, runs `benchmark_score`, and produces a submission-formatted JSON + leaderboard entry.
+- GitHub repo layout for the benchmark, Hugging Face Dataset card, optional Hugging Face Space for interactive evaluation.
+- **Deliverable:** `roverbench/` subpackage or separate repo with dataset, baselines, submission tooling, and starter leaderboard populated with the ~5 baselines.
+
+**Week 18: Benchmark paper draft.**
+- Dataset description (per §11.2 outline), justification of the split and challenge set, baseline results table, proposed evaluation protocol.
+- Figures: design-space coverage plot (t-SNE/PCA of the 40k LHS), per-scenario distribution plots, feasibility rate per scenario, baseline accuracy bar charts, challenge-set difficulty heatmap.
+- Ethics / limitations statement: specific-mass calibration range, soil-parameter domain, capability-vs-utilisation framing, absence of thermal as a design variable.
+- **Deliverable:** Complete Paper-2 draft at ~8 pages main + unlimited appendix (NeurIPS D&B format).
+
+**Week 19: Review, polish, submit.**
+- Internal review + advisor feedback.
+- Final polish: citations, figure typography, reproducibility appendix, code/data archive DOI (Zenodo).
+- Submission package for target venue + a preprint on arXiv (cs.LG + eess.SY cross-listing).
+- Announcement post with the leaderboard link.
+- **Deliverable:** Paper 2 submitted; leaderboard live; dataset archived with DOI.
+
+**If Phase 5 slips.** The gating decision at Week 16 is the right moment to defer. Phase-5 work is additive — nothing downstream of Paper 1 depends on it, and the benchmark hooks in the Week-6 dataset remain valuable internal infrastructure regardless of whether the benchmark gets released externally this cycle or later.
+
 ---
 
 ## 7. Validation Strategy
@@ -324,9 +367,11 @@ The paper's credibility depends on a layered validation approach. Each layer add
 
 ## 9. Minimum Viable Paper vs Full Vision
 
-**Minimum viable** (everything that's at risk goes wrong): Bekker-Wong-only mission evaluator, single-fidelity surrogate, validation against published wheel data and one or two real rovers, parametric sweeps with simple constraint handling, basic SHAP analysis. Frame as "Open-source tradespace exploration framework for lunar micro-rover co-design." Publishable at IEEE Aerospace, AIAA SciTech, or *Acta Astronautica*.
+**Minimum viable Paper 1** (SCM fails, W7.5 says "report as bounded sensitivity," Phase-5 deferred): analytical-only mission evaluator with capability-envelope framing, single-fidelity surrogate with two-stage feasibility model, validation against published wheel data and the Week-5 flown-rover registry (Rashid / Pragyan / Yutu-2 / Sojourner), parametric sweeps, NSGA-II Pareto fronts, SHAP-based design rules. Frame around contributions #2 (capability-envelope framework) and #3 (open-source tool) with #1 (decomposition architecture) written as "we present the decomposition architecture and quantify that correction magnitude is small enough in this regime to report as a sensitivity." Publishable at IEEE Aerospace, AIAA SciTech, or *Acta Astronautica*.
 
-**Full vision** (everything works): Multi-fidelity evaluator with PyChrono SCM corrections, uncertainty-aware surrogate, NSGA-II Pareto fronts for four mission scenarios, rediscovery validation against three real rovers, design rules with cross-scenario comparisons, packaged open-source tool with pretrained models and tutorial notebooks. Publishable at *Journal of Field Robotics*, *Journal of Spacecraft and Rockets*, or *Acta Astronautica* with stronger framing.
+**Full vision Paper 1** (SCM works, W7.5 ships composed surrogate): multi-fidelity evaluator with PyChrono SCM corrections, composed surrogate `final = analytical + correction` with uncertainty-aware prediction intervals, per-layer error budget, rediscovery validation against two flown rovers, cross-scenario design rules, packaged open-source tool with pretrained models. Publishable at *Journal of Field Robotics*, *International Journal of Robotics Research*, or *Journal of Spacecraft and Rockets*.
+
+**Paper 2 release (Phase 5)** is independent of Paper 1's outcome and is gated at Week 16 on (a) Paper 1 submission status, (b) dataset stability, (c) venue window. Either MVP or full-vision Paper 1 can anchor Paper 2 as the reference baseline on the leaderboard; the benchmark contribution is dataset + task + baselines + leaderboard, not any single surrogate's accuracy.
 
 ---
 
@@ -340,7 +385,10 @@ roverdevkit/
 │   ├── published_rovers.csv          # Specs + citations for ~10 real rovers
 │   ├── soil_simulants.csv            # Bekker params for FJS-1, JSC-1A, GRC-1
 │   ├── validation/                   # Single-wheel testbed data from literature
-│   ├── analytical/                   # Generated 50k LHS samples
+│   ├── analytical/                   # Generated LHS samples (Phase 2)
+│   │   ├── lhs_v1.parquet            # Canonical 40k-row dataset + canonical split column
+│   │   ├── SCHEMA.md                 # Versioned column spec, units, citations
+│   │   └── challenge_v1.parquet      # ~200-design corner-case set (Phase 5)
 │   └── scm/                          # PyChrono SCM runs (if Path 2 active)
 │
 ├── roverdevkit/
@@ -364,9 +412,14 @@ roverdevkit/
 │   │   └── traverse_sim.py           # Time-stepped traverse loop
 │   │
 │   ├── surrogate/
-│   │   ├── train.py
-│   │   ├── models.py                 # GBT, NN, multi-fidelity composition
+│   │   ├── sampling.py               # LHS sampler (stratified on n_wheels)
+│   │   ├── dataset.py                # Parallel dataset builder, split helpers, Parquet I/O
 │   │   ├── features.py
+│   │   ├── baselines.py              # Linear, RF, XGBoost, MLP; feasibility classifier
+│   │   ├── models.py                 # Composed multi-fidelity surrogate (Phase 2 final)
+│   │   ├── metrics.py                # R²/RMSE/MAPE, AUC/F1, per-scenario breakdowns
+│   │   ├── benchmark_score.py        # Public leaderboard metric API (Phase 5)
+│   │   ├── train.py
 │   │   └── uncertainty.py
 │   │
 │   ├── tradespace/
@@ -381,85 +434,159 @@ roverdevkit/
 │       └── error_budget.py
 │
 ├── notebooks/
+│   ├── 00_real_rover_validation.ipynb      # Week 5
 │   ├── 01_interactive_exploration.ipynb
-│   ├── 02_pareto_fronts.ipynb
-│   ├── 03_rediscover_real_rovers.ipynb
-│   └── 04_reproduce_paper.ipynb
+│   ├── 02_baseline_surrogates.ipynb        # Week 6 results
+│   ├── 03_pareto_fronts.ipynb
+│   ├── 04_rediscover_real_rovers.ipynb
+│   └── 05_reproduce_paper.ipynb
 │
 ├── pretrained/
-│   └── default_surrogate.pkl         # Ships with the package
+│   ├── default_surrogate.pkl               # Ships with the package
+│   └── roverbench_v1_composed.pkl          # Phase-5 reference baseline
+│
+├── roverbench/                             # Phase-5 benchmark release
+│   ├── README.md                           # Task spec, submission format, leaderboard
+│   ├── submission_schema.json              # Expected prediction format
+│   ├── submit.py                           # roverbench_submit CLI
+│   └── leaderboard.csv                     # Versioned baseline results
 │
 └── tests/
     ├── test_terramechanics.py
     ├── test_power.py
     ├── test_mission_evaluator.py
-    └── test_surrogate.py
+    ├── test_surrogate.py
+    └── test_benchmark_score.py             # Phase-5 public metric API
 ```
 
-The pretrained surrogate ships with the package so users can do tradespace exploration without installing PyChrono.
+The pretrained surrogate ships with the package so users can do tradespace exploration without installing PyChrono. The `roverbench/` subpackage is the public-facing benchmark interface for Paper 2.
 
 ---
 
-## 11. Paper Outline
+## 11. Paper Strategy
 
-**Target venue:** *Journal of Field Robotics*, *Journal of Spacecraft and Rockets*, or *Acta Astronautica* (full vision); IEEE Aerospace or AIAA SciTech (minimum viable).
+Two papers come out of this codebase: one during the semester (methodology-forward), one as a post-semester benchmark release. The two are complementary, target non-overlapping citation communities, and share the dataset and surrogate as core artifacts.
+
+### 11.1 Paper 1 — Methodology paper (semester, Weeks 13-15)
+
+**Target venues:** *Journal of Field Robotics* (primary), *International Journal of Robotics Research*, or *Journal of Spacecraft and Rockets*. IEEE Aerospace or AIAA SciTech as MVP venues if the full claim has to be scoped down.
 
 ### Title
-RoverDevKit: ML-Accelerated Co-Design of Mobility and Power for Lunar Micro-Rovers
+Multi-Fidelity Surrogate Modeling for Capability-Envelope Tradespace Exploration: Application to Lunar Micro-Rovers
 
 ### Abstract (~250 words)
-- Problem: Coupled wheel-power-mass trades for lunar micro-rovers are high-dimensional and currently done with proprietary tools or static spreadsheets
-- Approach: Open-source mission evaluator + multi-fidelity ML surrogate + NSGA-II optimization
-- Key result 1: Surrogate achieves R² > 0.95 at 10,000× speedup over the evaluator
-- Key result 2: Optimizer rediscovers Rashid and Pragyan design points within stated tolerances
-- Key result 3: SHAP analysis reveals [specific cross-scenario design insight]
-- Key result 4: Tool released as open-source software with pretrained models
+- **Problem.** Coupled wheel-power-mass trades for lunar micro-rovers are high-dimensional and currently done with proprietary tools (JPL Team X, ESA CDF) or static spreadsheet models. Existing open-source work is either component-level (single wheel) or conflates hardware capability with operational utilisation, producing range predictions that disagree with flown rovers by 5-10×.
+- **Approach.** We introduce a **decomposition architecture** for multi-fidelity mission-level surrogates in which the baseline analytical model, a high-fidelity SCM correction, and the surrogate ML fidelity contribute **separately attributable** error sources. We also formalise a **capability-envelope vs operational-utilisation** distinction that separates what the hardware can sustain from what ops schedules actually command.
+- **Key result 1 (methodology).** Decomposition architecture achieves R² > 0.95 for mission range and energy margin, with each error layer independently validated against wheel testbed data, published rover traverses, and ML holdout.
+- **Key result 2 (framing).** The capability-envelope metric reproduces Pragyan/Yutu-2/Sojourner hardware bounds at published ranges; operational utilisation is exposed as a post-hoc rescaling (`range_at_utilisation`) rather than a design variable.
+- **Key result 3 (rediscovery).** Optimizer rediscovers Rashid and Pragyan design points within stated tolerances when given matching mission constraints.
+- **Key result 4 (SCM verdict).** Quantified when high-fidelity SCM corrections materially move mission-level answers vs when Bekker-Wong is sufficient, resolving an open question for practitioners.
+- **Deliverable.** Open-source tool (`roverdevkit`) with pretrained surrogates, the mission evaluator, and the four-scenario library. Data and baselines released.
+
+### Contributions (in priority order)
+1. **Multi-fidelity decomposition architecture** with separately-attributable error sources (analytical baseline + SCM correction surrogate + mission-level surrogate, each with its own validation layer and error budget).
+2. **Capability-envelope framing** that explicitly separates hardware-sustainable performance from ops-commanded utilisation, with a post-hoc rescaling (`range_at_utilisation`) for ops queries.
+3. **Open-source mission evaluator and pretrained surrogates** (not just a paper) validated against flown rover data.
+4. **Rediscovery test** as a falsifiable end-to-end validation of the combined stack against real flown rovers (Rashid, Pragyan; Yutu-2 / Sojourner as cross-checks).
 
 ### 1. Introduction
-- Importance of coupled design optimization for lunar micro-rovers
-- Current state: proprietary tools (Team X, CDF) or manual spreadsheet trades
-- Gap: no open-source, ML-accelerated tradespace tool with verifiable mission-level evaluator
+- Coupled design optimisation for lunar micro-rovers: why it matters, why existing tools are proprietary or spreadsheet-based
+- The capability-vs-utilisation confusion in the existing open literature
+- The multi-fidelity gap: mission-level surrogates typically learn from a single fidelity
 - Contribution statement
 
 ### 2. Background
 - 2.1 Lunar micro-rover design heritage and trends
-- 2.2 Terramechanics models and their tradeoffs (Bekker-Wong, SCM, CRM, DEM)
-- 2.3 ML surrogates in spacecraft/rover design — prior work and positioning
-- 2.4 Multi-objective optimization for engineering design
+- 2.2 Terramechanics model fidelity hierarchy (Bekker-Wong, SCM, CRM, DEM)
+- 2.3 Multi-fidelity surrogates (co-Kriging, residual / delta modeling, multi-fidelity neural networks)
+- 2.4 ML surrogates in spacecraft/rover design — prior work and positioning
+- 2.5 Capability-envelope engineering practice (JPL Team X, ESA CDF) and the gap in open literature
 
-### 3. Mission Evaluator
-- 3.1 Design variable parameterization
-- 3.2 Sub-model descriptions (terramechanics, power, mass, traverse)
-- 3.3 Mission scenario definitions
-- 3.4 Validation of individual sub-models
+### 3. Capability-Envelope Framework
+- 3.1 Design variables (12-dim) and why `drive_duty_cycle` is "designed duty," not operational utilisation
+- 3.2 Mission metrics as capability-at-designed-duty (`range_km`, `energy_margin_raw_pct`, …)
+- 3.3 Post-hoc `range_at_utilisation` rescaling and its domain of validity
+- 3.4 Mission scenario library (equatorial mare, polar prospecting, highland slope, crater rim)
 
-### 4. Multi-Fidelity Surrogate
-- 4.1 Data generation strategy (LHS, analytical and SCM paths)
-- 4.2 Surrogate architecture and training
-- 4.3 Uncertainty quantification
-- 4.4 Surrogate accuracy results
+### 4. Mission Evaluator
+- 4.1 Sub-model descriptions (terramechanics, solar/power, battery, mass, traverse, thermal)
+- 4.2 Sub-model validation against published experimental data
+- 4.3 Bottom-up mass model calibration against a flown-rover validation set (target MedAE ≤ 30% in-class)
 
-### 5. Tradespace Exploration
-- 5.1 NSGA-II setup and constraints
-- 5.2 Pareto fronts for the four mission scenarios
-- 5.3 SHAP-based design rules
-- 5.4 Cross-scenario insights
+### 5. Multi-Fidelity Decomposition Architecture
+- 5.1 Analytical baseline: LHS (40k+) over 12-dim design space crossed with 4 scenarios
+- 5.2 SCM wheel-level correction model: when and why Bekker-Wong is weak
+- 5.3 Mission-level correction surrogate: residual modeling of `Δmetric = f(design, scenario)`
+- 5.4 Composed architecture: `final = analytical_surrogate + correction_surrogate`
+- 5.5 Per-layer error budget: surrogate fidelity, correction magnitude, baseline physics, real-rover residual
 
-### 6. Validation Against Real Rovers
-- 6.1 Mission evaluator vs published rover traverse data
-- 6.2 Rediscovery test: optimizer vs Rashid, Pragyan
-- 6.3 Sensitivity to `MassModelParams` and soil parameter uncertainty
+### 6. Surrogate Training and Uncertainty
+- 6.1 Baseline models (ridge, random forest, XGBoost, MLP), two-stage feasibility classifier + regressor
+- 6.2 Hyperparameter tuning (Optuna), calibrated prediction intervals
+- 6.3 Accuracy results: aggregate and per-scenario
+- 6.4 Registry-rover sanity check (Layer-1 at real operating points)
 
-### 7. Discussion
-- 7.1 Limitations: specific-mass calibration range (5–50 kg), SCM fidelity, gravity scaling, thermal simplification
-- 7.2 When to trust the surrogate vs when to run full evaluator
-- 7.3 Implications for real mission design
-- 7.4 Comparison with existing trade study tools
+### 7. Tradespace Exploration
+- 7.1 NSGA-II setup, three-objective Pareto, constraints including the feasibility classifier
+- 7.2 Pareto fronts for the four mission scenarios
+- 7.3 SHAP-based design rules; decomposed SHAP attribution into baseline + correction contributions
+- 7.4 Cross-scenario insights
 
-### 8. Conclusion
+### 8. Validation Against Real Rovers
+- 8.1 Layered error budget (Layers 1-4 from §7 of this plan)
+- 8.2 Rediscovery test: optimizer vs Rashid, Pragyan
+- 8.3 Sensitivity to `MassModelParams` and soil parameters
+
+### 9. Discussion
+- 9.1 Limitations: specific-mass calibration range (5-50 kg), SCM fidelity, gravity scaling, thermal simplification
+- 9.2 When to trust the surrogate vs when to run the full evaluator
+- 9.3 When SCM correction matters and when Bekker-Wong is sufficient (W7.5 gate outcome)
+- 9.4 Comparison with existing trade study tools (Team X, CDF, FastFEMP, commercial MBSE)
+- 9.5 Generalisation of the decomposition architecture to other terramechanics-constrained robots (agricultural, off-road, Mars rovers)
+
+### 10. Conclusion
 - Summary of contributions
-- Open-source tool availability
+- Open-source tool availability, pretrained surrogate release
 - Future work: thermal as a design dimension, larger rover classes, higher-fidelity terramechanics, multi-rover mission design
+
+### 11.1.1 Null-result framing (W7.5 gate)
+
+Both outcomes of the W7.5 correction-magnitude gate are publishable with equivalent framing:
+- **Large correction (> 10% median |Δrange|):** "Multi-fidelity decomposition recovers an SCM correction that Bekker-Wong misses; we quantify the correction per scenario."
+- **Small correction (< 10%):** "Bekker-Wong at mission level is sufficient within X% for the micro-rover regime at operational slopes. We quantify *where* high-fidelity physics matters and where it does not, saving practitioners unnecessary SCM runs."
+
+The paper's §5, §8, and §9 sections are written so either outcome slots in without structural changes. The decomposition architecture is the contribution; the correction magnitude is evidence about its utility in one domain.
+
+---
+
+### 11.2 Paper 2 — Benchmark release (post-semester, Weeks 16-19)
+
+**Target venues:** *NeurIPS Datasets & Benchmarks Track* (primary, June deadline if timing works; otherwise NeurIPS 2027), *IEEE Robotics and Automation Letters* benchmark track, or *ICRA* benchmark track.
+
+### Title
+RoverBench: An Open Benchmark for Mission-Level Design Surrogates of Lunar Micro-Rovers
+
+### Pitch
+Release the 40k (50k if scaled) LHS dataset, held-out test split, evaluation script, and Paper-1 surrogate as a baseline. Others train their own surrogates and submit predictions; we maintain a leaderboard on surrogate-vs-evaluator accuracy (R² / RMSE / MAPE on `range_km`, `energy_margin_raw_pct`, `slope_capability_deg`, feasibility AUC). The benchmark makes the multi-fidelity methodology claim of Paper 1 reproducible and competitive.
+
+### Scope (deliberately narrow)
+- **Prediction task only**, not a design-optimisation task. Given `(design, scenario)`, predict `MissionMetrics`. Scoring is held-out RMSE / R² / AUC, nothing more.
+- **Dataset**: Week-6 LHS parquet + Week-7 correction subset, with a canonical train/val/test split frozen at dataset generation time.
+- **Baselines**: linear, random forest, XGBoost, MLP, Paper-1 composed surrogate. Leaderboard scored on held-out test split.
+- **Infrastructure**: GitHub repo with submission-format spec + eval script; a Hugging Face Dataset card + Space for optional interactive evaluation; manual leaderboard updates (no automated CI).
+
+### Why D-narrow (not D-broad design-optimisation benchmark)
+- Prediction tasks pull from a broad ML-surrogate / physics-informed-ML community (thousands of active researchers); design-optimisation benchmarks pull from a ~50-person community.
+- Prediction benchmarks have a crisp scoring rubric that's not gameable; design-optimisation benchmarks require fairness adjudication.
+- Prediction benchmarks require a parquet + eval script; design-optimisation benchmarks require a submission pipeline with input validation.
+- The dataset exists as a byproduct of Paper 1; the benchmark is packaging work, not new science.
+
+### Contributions
+1. **The first open mission-level rover-design benchmark** with validated baselines and a held-out test split.
+2. **Reference implementation** of the Paper-1 multi-fidelity surrogate as a leaderboard entry.
+3. **Dataset documentation and citations** traceable per-column to primary sources (SMAD, AIAA, vendor catalogues, NASA Glenn, cited flown rovers).
+
+See §6 "Phase 5: Benchmark Release" for the concrete week-by-week work.
 
 ---
 
@@ -487,14 +614,18 @@ RoverDevKit: ML-Accelerated Co-Design of Mobility and Power for Lunar Micro-Rove
 - [ ] Week 3: Mass model and published rover database complete
 - [ ] Week 4: Mission evaluator end-to-end functional
 - [ ] Week 5: Real rover validation complete (critical gate)
-- [ ] Week 6: Analytical dataset (40k rows, pilot-gated) generated, baseline surrogates trained, feasibility classifier trained, registry-rover sanity check passed
+- [ ] Week 6: Analytical dataset (40k rows, pilot-gated) generated with canonical split + SCHEMA.md + benchmark_score helper; baseline surrogates trained; feasibility classifier trained; registry-rover sanity check passed
 - [ ] Week 7: SCM data generated (if active) or feature engineering complete
-- [ ] Week 7.5: SCM correction-magnitude gate decided; layered vs regenerate path recorded in project log
+- [ ] Week 7.5: SCM correction-magnitude gate decided; ship composed surrogate vs bounded sensitivity recorded in project log
 - [ ] Week 8: Final surrogate with uncertainty quantification
 - [ ] Week 9: Layered validation complete with error budget
 - [ ] Week 10: Tradespace sweep tool functional
 - [ ] Week 11: NSGA-II Pareto fronts generated for all scenarios
 - [ ] Week 12: SHAP analysis, rediscovery validation, tool packaged
 - [ ] Week 13: All figures generated
-- [ ] Week 14: Paper draft complete
-- [ ] Week 15: Paper revised and ready for submission
+- [ ] Week 14: Paper 1 draft complete
+- [ ] Week 15: Paper 1 revised and ready for submission
+- [ ] Week 16 *(post-semester, gated)*: RoverBench dataset + challenge set + `benchmark_score` v1 API frozen
+- [ ] Week 17 *(post-semester)*: Baselines packaged, submission interface and leaderboard live
+- [ ] Week 18 *(post-semester)*: Paper 2 (benchmark release) draft complete
+- [ ] Week 19 *(post-semester)*: Paper 2 submitted; Zenodo archive with DOI
