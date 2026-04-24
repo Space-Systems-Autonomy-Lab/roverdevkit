@@ -727,10 +727,13 @@ actually wants anyway.
   corrections can rederive corrected mission metrics without
   re-running the traverse on 40 k designs.
 - New Week 7.5 gate: "measure correction magnitude before committing
-  to multi-fidelity." If median `|Δrange_km| / range_km < 10%` and
-  no systematic sign bias, keep Week-6 surrogate and report
-  correction as a sensitivity column. Otherwise regenerate the LHS
-  parquet with correction applied (overnight re-run) and retrain.
+  to shipping a composed surrogate." Architecture is always composed
+  (`final = analytical + correction`, matching §6 W8's original
+  intent); the gate only decides whether the correction surrogate is
+  worth training and shipping, or SCM should be reported as a
+  bounded sensitivity only. No 40 k regeneration in either branch --
+  correction surrogate trains on ~500 SCM-corrected mission-level
+  pairs (~15 min with 8 workers).
 - Milestones checklist updated accordingly.
 
 **Context for sequencing.** Considered whether to front-load PyChrono
@@ -756,8 +759,12 @@ even if Path 2 falls over.
   fidelity surrogate captures SCM corrections missed by Bekker-Wong";
   small correction ⇒ "analytical surrogate is sufficient for mission-
   level tradespace, with SCM quantified as a bounded sensitivity."
-- The Week-6 dataset design (aggregate sub-model stats per row) is
-  what makes the W7.5 gate cheap enough to actually run. Without
-  those stats, the W7.5 correction would force a 40 k regeneration
-  just to measure its own magnitude.
+- Aggregate sub-model statistics in the Week-6 parquet (peak / mean
+  / P95 of drawbar pull, sinkage, torque, solar power, battery SOC)
+  are retained in the schema because they're the highest-signal
+  features for the W7.5 correction surrogate (which learns
+  `Δmission_metric = f(design, scenario, wheel-regime)`) and for
+  the Week-12 sub-model-level SHAP analysis. They are no longer
+  needed for "cheap regeneration" -- that branch was architecturally
+  unnecessary once the composed-surrogate framing was made explicit.
 
