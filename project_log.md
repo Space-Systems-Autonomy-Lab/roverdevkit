@@ -330,3 +330,110 @@ the 50 kg ceiling) and are included only as reference points.
 - Ready to start Week 4 (mission traverse simulator + thermal
   survival check).
 
+## 2026-04-24 — Week 4: mission traverse simulator and evaluator
+
+**Decision.** Wire up the full mission evaluator pipeline (soil lookup
+-> mass -> thermal -> slope capability -> time-stepped traverse ->
+aggregated metrics). Two small reversals of the original plan:
+
+1. **Never early-terminate the traverse sim.** The stub docstring said
+   to terminate on battery-floored or thermal-violated. Changed to
+   always run for the full mission duration; failure modes are
+   captured via `TraverseLog.battery_floored`, `.rover_stalled`,
+   `.reached_distance` flags and via the continuous metrics
+   (`range_km`, `energy_margin_pct`). This matters for Phase 2: the
+   surrogate needs uniform scoring across infeasible designs, which
+   early-return would throw away.
+
+2. **Added four modules the plan's W4 bullet list left implicit.**
+   The schema outputs (`slope_capability_deg`, `motor_torque_ok`,
+   etc.) require helpers the plan didn't enumerate. Filled the gaps:
+
+   - `roverdevkit/terramechanics/soils.py` — CSV → `SoilParameters`
+     catalogue (needed because scenarios reference soils by name).
+   - `roverdevkit/mission/scenarios.py` — YAML loader +
+     `list_scenarios()`.
+   - `roverdevkit/mission/capability.py` — max-climbable-slope via
+     brentq on `DP_avail(slope) - DP_req(slope) = 0` at slip=0.6.
+   - `roverdevkit/power/thermal.py` — closed-form single-node steady-
+     state survival check (Stefan-Boltzmann with hot-case
+     cos(latitude) insolation and cold-case regolith sink).
+
+**Context.** Reviewed the Week 4 bullets in project_plan.md §6 against
+the `MissionMetrics` schema and the Phase-2 surrogate requirements.
+Three gaps were silent: the scenario YAMLs reference soils by name but
+no loader existed; `slope_capability_deg` is a primary output but
+isn't a natural product of the traverse loop; and `motor_torque_ok`
+had no reference torque to compare against. Resolved by adding a
+helper for each gap.
+
+**Implementation details.**
+
+- Per-step physics in `traverse_sim.py`: solve `DP(slip) = required`
+  with `scipy.optimize.brentq` in slip bracket `[-0.9, 0.95]`. If the
+  bracket fails (slope unclimbable) we pin slip at the upper bracket,
+  zero forward velocity, and record `rover_stalled=True`. Motor power
+  = `T * omega / eta_motor` per wheel with `omega = v / (R*(1-s))`;
+  default motor efficiency 0.8 (Maxon catalogue).
+- Mobility power is duty-cycle-scaled (`delta * P_drive_full`) and
+  position advances by `v * dt * delta`. This is the standard
+  mission-average tradespace approximation; explicit drive schedules
+  are v2.
+- `motor_torque_ok` is judged against the same envelope the mass
+  model uses to size the motor subsystem
+  (`SF * mu * m*g / n_wheels * R`). Keeps the two definitions tied.
+- Thermal-architecture surface area defaults to a cube-root scaling
+  of chassis mass (`0.02 * m^(2/3) + 0.05`) so we don't have to plumb
+  new fields into `DesignVector` this week. Easy to override via
+  `evaluate(..., thermal_architecture=...)`.
+- `energy_margin_pct = (SOC_end - min_SOC) / (1 - min_SOC) * 100`,
+  clamped to 0 for designs that hit the floor. 0 = on the DoD floor,
+  100 = fully charged.
+
+**Performance.**
+
+- Per-evaluation cost on the analytical path: ~1.7 s at `dt_s = 1 h`
+  for a 14-day mission, ~290 ms at `dt_s = 6 h`, ~74 ms at `dt_s = 1
+  day`. Target for the Path-1 surrogate dataset (50k samples in an
+  afternoon) is achievable at `dt_s ≥ 6 h` on 4 parallel workers.
+- Default `dt_s = 1 h` keeps hourly resolution for the integration
+  tests and debugging; Phase 2 scripts will coarsen it.
+
+**Validation gates.**
+
+- `tests/test_soils.py` (6) + `tests/test_scenarios.py` (12): every
+  scenario's `soil_simulant` resolves in the catalogue; all four
+  canonical scenarios round-trip through pydantic.
+- `tests/test_thermal.py` (13): construction validation,
+  equator-vs-pole hot case, RHU warming in cold case, Stefan-Boltzmann
+  balance closes to 1e-6, survive / overheat / freeze branches.
+- `tests/test_capability.py` (7): softer soil lowers slope capability,
+  larger wheel improves it, cap at 35 deg when rover exceeds schema
+  bound.
+- `tests/test_traverse_sim.py` (11): full-duration run, monotonic time
+  and non-decreasing position, SOC within [min, 1], solar = 0 at
+  night, steeper slope draws more mobility power, bigger solar panel
+  collects more energy, underpowered rover floors battery, soft-soil
+  + steep scenario triggers the stall flag.
+- `tests/test_mission_evaluator.py` (12): smoke test on all four
+  scenarios, mass in 5-50 kg class, finite & in-range metrics,
+  range bounded by traverse distance, bigger battery ≥ smaller on
+  energy margin, denser soil > looser on slope capability, SCM path
+  raises NotImplementedError until Week 7.
+
+**Consequences.**
+
+- Fast-loop status: `pytest -q` → **163 passed, 1 xfailed** (pre-
+  existing Wong textbook digitisation xfail). Ruff, ruff format, mypy
+  all clean.
+- Updated `traverse_sim.py`'s docstring to reflect the "never
+  early-terminate" decision; stub function signature now takes a full
+  parameter list instead of `*args, **kwargs`.
+- `TraverseLog` schema added fields: `mobility_power_w`,
+  `wheel_torque_nm`, `sun_elevation_deg`, `battery_floored`,
+  `rover_stalled`, `reached_distance`. These are consumed by the
+  evaluator and useful for Week 5 validation notebooks.
+- Week 5 can now focus on the Yutu-2 / Pragyan / Rashid real-rover
+  cross-check: the evaluator pipeline runs end-to-end and returns
+  plausible numbers for all four scenarios.
+

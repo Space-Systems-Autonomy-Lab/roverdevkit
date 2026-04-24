@@ -244,14 +244,18 @@ def single_wheel_forces_scm(
 
     cart_x = chrono.ChBody()
     cart_x.SetMass(0.2)
-    cart_x.SetPos(chrono.ChVector3d(cfg.wheel_start_x_m, 0.0, wheel.radius_m + cfg.wheel_clearance_m))
+    cart_x.SetPos(
+        chrono.ChVector3d(cfg.wheel_start_x_m, 0.0, wheel.radius_m + cfg.wheel_clearance_m)
+    )
     sys_.AddBody(cart_x)
 
     cart_z = chrono.ChBody()
     cart_z.SetMass(cart_z_mass)
     iner = 0.1 * cart_z_mass
     cart_z.SetInertiaXX(chrono.ChVector3d(iner, iner, iner))
-    cart_z.SetPos(chrono.ChVector3d(cfg.wheel_start_x_m, 0.0, wheel.radius_m + cfg.wheel_clearance_m))
+    cart_z.SetPos(
+        chrono.ChVector3d(cfg.wheel_start_x_m, 0.0, wheel.radius_m + cfg.wheel_clearance_m)
+    )
     sys_.AddBody(cart_z)
 
     # Rigid wheel: cylinder with axis along local Y. Collision is enabled
@@ -269,7 +273,9 @@ def single_wheel_forces_scm(
     ixx = 0.5 * wheel_mass * wheel.radius_m**2
     iyy = wheel_mass * (3.0 * wheel.radius_m**2 + wheel.width_m**2) / 12.0
     wheel_body.SetInertiaXX(chrono.ChVector3d(iyy, ixx, iyy))
-    wheel_body.SetPos(chrono.ChVector3d(cfg.wheel_start_x_m, 0.0, wheel.radius_m + cfg.wheel_clearance_m))
+    wheel_body.SetPos(
+        chrono.ChVector3d(cfg.wheel_start_x_m, 0.0, wheel.radius_m + cfg.wheel_clearance_m)
+    )
     wheel_body.EnableCollision(True)
     sys_.AddBody(wheel_body)
 

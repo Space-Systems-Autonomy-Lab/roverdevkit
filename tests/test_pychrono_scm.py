@@ -91,8 +91,12 @@ def test_vertical_force_balance_closes(
     load = 30.0
     telemetry: dict[str, float] = {}
     single_wheel_forces_scm(
-        rashid_wheel, apollo_nominal, vertical_load_n=load, slip=0.2,
-        config=fast_config, telemetry=telemetry,
+        rashid_wheel,
+        apollo_nominal,
+        vertical_load_n=load,
+        slip=0.2,
+        config=fast_config,
+        telemetry=telemetry,
     )
     assert abs(telemetry["fz_residual_n"]) < 0.05 * load, (
         f"Fz = {telemetry['fz_mean_n']:.2f} N but applied load = {load} N "
@@ -110,7 +114,11 @@ def test_drawbar_pull_monotonic_in_driving_slip(
     slips = [0.0, 0.1, 0.2, 0.35]
     dps = [
         single_wheel_forces_scm(
-            rashid_wheel, apollo_nominal, load, s, config=fast_config,
+            rashid_wheel,
+            apollo_nominal,
+            load,
+            s,
+            config=fast_config,
         ).drawbar_pull_n
         for s in slips
     ]
@@ -126,7 +134,10 @@ def test_driving_torque_positive_and_sinkage_sensible(
     fast_config: ScmConfig,
 ) -> None:
     f = single_wheel_forces_scm(
-        rashid_wheel, apollo_nominal, vertical_load_n=30.0, slip=0.2,
+        rashid_wheel,
+        apollo_nominal,
+        vertical_load_n=30.0,
+        slip=0.2,
         config=fast_config,
     )
     assert f.driving_torque_nm > 0.0
@@ -150,7 +161,11 @@ def test_drawbar_pull_below_mohr_coulomb_limit(
 
     load = 30.0
     f = single_wheel_forces_scm(
-        rashid_wheel, apollo_nominal, load, slip=0.3, config=fast_config,
+        rashid_wheel,
+        apollo_nominal,
+        load,
+        slip=0.3,
+        config=fast_config,
     )
     mu_max = math.tan(math.radians(apollo_nominal.friction_angle_deg))
     assert abs(f.drawbar_pull_n) < 0.9 * mu_max * load, (
@@ -188,12 +203,15 @@ def test_scm_and_analytical_agree_in_order_of_magnitude(
 
     f_ana = single_wheel_forces(rashid_wheel, apollo_nominal, load, slip)
     f_scm = single_wheel_forces_scm(
-        rashid_wheel, apollo_nominal, load, slip, config=fast_config,
+        rashid_wheel,
+        apollo_nominal,
+        load,
+        slip,
+        config=fast_config,
     )
 
     assert (f_ana.drawbar_pull_n > 0) == (f_scm.drawbar_pull_n > 0), (
-        f"DP sign mismatch: analytical={f_ana.drawbar_pull_n:+.2f}, "
-        f"SCM={f_scm.drawbar_pull_n:+.2f}"
+        f"DP sign mismatch: analytical={f_ana.drawbar_pull_n:+.2f}, SCM={f_scm.drawbar_pull_n:+.2f}"
     )
     assert 0.2 < f_scm.drawbar_pull_n / f_ana.drawbar_pull_n < 5.0, (
         f"DP ratio SCM/analytical = "
@@ -201,12 +219,10 @@ def test_scm_and_analytical_agree_in_order_of_magnitude(
         f"(SCM={f_scm.drawbar_pull_n:.2f}, analytical={f_ana.drawbar_pull_n:.2f})"
     )
     assert 0.3 < f_scm.driving_torque_nm / f_ana.driving_torque_nm < 3.0, (
-        f"T ratio SCM/analytical = "
-        f"{f_scm.driving_torque_nm / f_ana.driving_torque_nm:.2f}"
+        f"T ratio SCM/analytical = {f_scm.driving_torque_nm / f_ana.driving_torque_nm:.2f}"
     )
     assert 0.3 < f_scm.sinkage_m / f_ana.sinkage_m < 3.0, (
-        f"sinkage ratio SCM/analytical = "
-        f"{f_scm.sinkage_m / f_ana.sinkage_m:.2f}"
+        f"sinkage ratio SCM/analytical = {f_scm.sinkage_m / f_ana.sinkage_m:.2f}"
     )
 
 
@@ -230,8 +246,12 @@ def test_scm_wall_clock_under_path2_budget(
     """
     telemetry: dict[str, float] = {}
     single_wheel_forces_scm(
-        rashid_wheel, apollo_nominal, 30.0, 0.2,
-        config=fast_config, telemetry=telemetry,
+        rashid_wheel,
+        apollo_nominal,
+        30.0,
+        0.2,
+        config=fast_config,
+        telemetry=telemetry,
     )
     sim_time_s = fast_config.settle_time_s + fast_config.drive_time_s
     ratio = telemetry["wall_clock_s"] / sim_time_s

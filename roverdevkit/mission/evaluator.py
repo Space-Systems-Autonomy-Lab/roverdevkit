@@ -5,35 +5,112 @@ surrogate layer is a fast approximation of this function; the tradespace
 and validation layers consume its outputs. Every ML claim in the paper is
 grounded in what this function computes.
 
+Pipeline
+--------
+1. Mass model  -> total vehicle mass + per-subsystem breakdown
+   (:mod:`roverdevkit.mass`).
+2. Thermal     -> binary survive-the-mission flag
+   (:mod:`roverdevkit.power.thermal`).
+3. Soil lookup -> Bekker-Wong parameters for the scenario's simulant
+   (:mod:`roverdevkit.terramechanics.soils`).
+4. Capability  -> max climbable slope on this soil
+   (:mod:`roverdevkit.mission.capability`).
+5. Traverse    -> time-stepped run-to-completion log
+   (:mod:`roverdevkit.mission.traverse_sim`).
+6. Aggregate   -> MissionMetrics (schema).
+
 Public API::
 
     from roverdevkit.mission.evaluator import evaluate
     from roverdevkit.mission.scenarios import load_scenario
     from roverdevkit.schema import DesignVector
 
-    metrics = evaluate(design_vector, scenario)
+    metrics = evaluate(design, load_scenario("equatorial_mare_traverse"))
+
+Design notes
+------------
+- The evaluator **always returns** a :class:`MissionMetrics` object; it
+  does not short-circuit on design failures. Constraint flags
+  (``thermal_survival``, ``motor_torque_ok``) and continuous metrics
+  (``energy_margin_pct``, ``range_km``) encode the failure modes instead.
+  This is critical for training the Phase-2 surrogate over the full
+  design space including infeasible regions.
+- ``motor_torque_ok`` is judged against the same peak-torque envelope
+  the mass model used to size the motor subsystem
+  (:func:`roverdevkit.mass.parametric_mers._motors_mass`). Keeping the
+  two definitions tied together prevents silent drift.
 """
 
 from __future__ import annotations
 
+import math
+
+import numpy as np
+
+from roverdevkit.mass.parametric_mers import (
+    MassBreakdown,
+    MassModelParams,
+    estimate_mass_from_design,
+)
+from roverdevkit.mission.capability import max_climbable_slope_deg
+from roverdevkit.mission.traverse_sim import TraverseLog, run_traverse
+from roverdevkit.power.thermal import (
+    ThermalArchitecture,
+    default_architecture_for_design,
+    survives_mission,
+)
 from roverdevkit.schema import DesignVector, MissionMetrics, MissionScenario
+from roverdevkit.terramechanics.bekker_wong import WheelGeometry
+from roverdevkit.terramechanics.soils import get_soil_parameters
+
+
+def _sizing_peak_torque_nm(
+    total_mass_kg: float,
+    wheel_radius_m: float,
+    n_wheels: int,
+    params: MassModelParams,
+) -> float:
+    """Peak per-wheel torque the motor subsystem is sized to deliver.
+
+    Mirrors the calculation inside
+    :func:`roverdevkit.mass.parametric_mers._motors_mass`. The safety
+    factor is baked in -- this is the *available* torque ceiling, so
+    ``motor_torque_ok`` is True iff the traverse-observed peak torque
+    stays under this number.
+    """
+    weight_per_wheel_n = total_mass_kg * params.gravity_moon_m_per_s2 / n_wheels
+    return (
+        params.motor_sizing_safety_factor
+        * params.motor_peak_friction_coef
+        * weight_per_wheel_n
+        * wheel_radius_m
+    )
+
+
+def _energy_margin_pct(log: TraverseLog, min_soc: float) -> float:
+    """Discretionary-energy margin at end of mission, percent.
+
+    0 % = battery sitting on the DoD floor; 100 % = full charge above
+    the floor. Defined as ``(SOC_end - min_SOC) / (1 - min_SOC) * 100``
+    with a clamp at 0 so unsurvivable missions return 0 rather than a
+    negative number.
+    """
+    if log.state_of_charge.size == 0:
+        return 0.0
+    soc_end = float(log.state_of_charge[-1])
+    span = max(1e-9, 1.0 - min_soc)
+    return max(0.0, (soc_end - min_soc) / span * 100.0)
 
 
 def evaluate(
     design: DesignVector,
     scenario: MissionScenario,
     *,
+    mass_params: MassModelParams | None = None,
+    thermal_architecture: ThermalArchitecture | None = None,
     use_scm_correction: bool = False,
 ) -> MissionMetrics:
     """Run the full mission evaluator on one design in one scenario.
-
-    Pipeline:
-
-    1. Mass model → total mass, per-wheel vertical load.
-    2. Thermal survival check → binary constraint.
-    3. Traverse sim → time-stepped loop of terramechanics + power + battery
-       updates until traverse complete or battery depleted.
-    4. Aggregate time-series into mission-level metrics.
 
     Parameters
     ----------
@@ -41,9 +118,104 @@ def evaluate(
         12-D design vector.
     scenario
         Mission context (latitude, terrain, distance, sun geometry).
+    mass_params
+        Optional :class:`MassModelParams` override; defaults to the
+        calibrated values in the mass module.
+    thermal_architecture
+        Optional override. If ``None``, a default enclosure is built
+        from a fraction of the chassis using
+        :func:`default_architecture_for_design`.
     use_scm_correction
-        If True, apply the learned Bekker-Wong → SCM correction (Path 2).
-        Requires the correction model to be loaded. Default False so the
-        analytical path always works.
+        If True, apply the learned Bekker-Wong -> SCM correction
+        (Path 2). Requires the correction model to be loaded. Default
+        False so the analytical path always works; wired up in Week 7.
+
+    Returns
+    -------
+    MissionMetrics
+        Pydantic frozen model summarising mission-level performance.
     """
-    raise NotImplementedError("Implement in Week 4 per project_plan.md §6.")
+    if use_scm_correction:
+        raise NotImplementedError("SCM correction path is wired in Week 7 (project_plan.md §6).")
+
+    mass_params = mass_params or MassModelParams()
+
+    # 1. Mass model.
+    breakdown: MassBreakdown = estimate_mass_from_design(design, params=mass_params)
+    total_mass_kg = breakdown.total_kg
+
+    # 2. Thermal survival. Surface area proxy: ~half the chassis side
+    # area -- a defensible default for tradespace work; overridable.
+    if thermal_architecture is None:
+        # Rough enclosure surface-area proxy: scales with chassis mass
+        # via a cube-root law (box side ~ mass^(1/3) * density^(-1/3)).
+        # 0.02 m^2/kg^(2/3) is a coarse calibration that gives ~0.07 m^2
+        # for a 6 kg chassis and ~0.24 m^2 for a 30 kg chassis.
+        surface_area_m2 = 0.02 * (design.chassis_mass_kg ** (2.0 / 3.0)) + 0.05
+        thermal_architecture = default_architecture_for_design(surface_area_m2=surface_area_m2)
+    thermal_ok = survives_mission(
+        thermal_architecture,
+        design.avionics_power_w,
+        scenario.latitude_deg,
+    )
+
+    # 3. Soil lookup.
+    soil = get_soil_parameters(scenario.soil_simulant)
+
+    # 4. Slope capability. Independent of the scenario's nominal slope;
+    # reports what the design *can* do in this soil.
+    wheel = WheelGeometry(
+        radius_m=design.wheel_radius_m,
+        width_m=design.wheel_width_m,
+        grouser_height_m=design.grouser_height_m,
+        grouser_count=design.grouser_count,
+    )
+    slope_capability = max_climbable_slope_deg(
+        wheel,
+        soil,
+        total_mass_kg=total_mass_kg,
+        n_wheels=design.n_wheels,
+        gravity_m_per_s2=mass_params.gravity_moon_m_per_s2,
+    )
+
+    # 5. Traverse.
+    log = run_traverse(
+        design,
+        scenario,
+        soil,
+        total_mass_kg=total_mass_kg,
+        gravity_m_per_s2=mass_params.gravity_moon_m_per_s2,
+    )
+
+    # 6. Aggregate.
+    range_km = float(log.position_m[-1]) / 1000.0
+    energy_margin_pct = _energy_margin_pct(log, min_soc=0.15)
+    peak_torque_nm = float(np.max(np.abs(log.wheel_torque_nm))) if log.wheel_torque_nm.size else 0.0
+    sinkage_max_m = float(np.max(log.sinkage_m)) if log.sinkage_m.size else 0.0
+
+    torque_ceiling = _sizing_peak_torque_nm(
+        total_mass_kg, design.wheel_radius_m, design.n_wheels, mass_params
+    )
+    motor_torque_ok = bool(peak_torque_nm <= torque_ceiling) and not log.rover_stalled
+
+    # Guard against NaN/inf creeping out of any sub-model; cap to safe
+    # defaults so downstream pydantic validation always succeeds.
+    if not math.isfinite(range_km):
+        range_km = 0.0
+    if not math.isfinite(energy_margin_pct):
+        energy_margin_pct = 0.0
+    if not math.isfinite(peak_torque_nm):
+        peak_torque_nm = 0.0
+    if not math.isfinite(sinkage_max_m):
+        sinkage_max_m = 0.0
+
+    return MissionMetrics(
+        range_km=range_km,
+        energy_margin_pct=energy_margin_pct,
+        slope_capability_deg=slope_capability,
+        total_mass_kg=total_mass_kg,
+        peak_motor_torque_nm=peak_torque_nm,
+        sinkage_max_m=sinkage_max_m,
+        thermal_survival=thermal_ok,
+        motor_torque_ok=motor_torque_ok,
+    )
