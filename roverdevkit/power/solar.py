@@ -36,7 +36,7 @@ Heiken, G., Vaniman, D. & French, B. M. (eds.) *Lunar Sourcebook*,
 Cambridge University Press, 1991. Ch. 3 (lunar environment, including
 the synodic vs sidereal day distinction and the Moon's small obliquity).
 
-Validation (Week 2)
+Validation
 -------------------
 Cross-check noon power for Yutu-2 (45.5 deg N selenographic latitude)
 against published Yutu-2 power-profile numbers; see ``tests/test_power.py``.
@@ -155,6 +155,12 @@ def sun_azimuth_deg(
         sin(az) = -cos(delta) * sin(H) / cos(el)
         cos(az) = (sin(delta) - sin(el) * sin(phi)) / (cos(el) * cos(phi))
 
+    where ``phi`` is latitude (``latitude_deg``), ``delta`` is solar
+    declination (``declination_deg``), ``H`` is the hour angle
+    (``lunar_hour_angle_deg``), ``el`` is the sun elevation derived from
+    the altitude formula in :func:`sun_elevation_deg`, and ``az`` is the
+    azimuth returned by this function.
+
     The sign convention puts az=0 at local north, az=90 at east, az=180 at
     south and az=270 at west, mirroring the standard SMAD/Patel definition.
 
@@ -206,6 +212,19 @@ def panel_power_w(
     Output power is then
 
         P = S * A * eta * max(0, cos(i)) * dust_factor.
+
+    Symbol key (math -> Python parameter / module constant):
+
+        P           output electrical power, W                (return value)
+        S           top-of-atmosphere solar irradiance, W/m^2 (``solar_constant_w_per_m2``)
+        A           active collector area, m^2                (``panel_area_m2``)
+        eta         DC conversion efficiency, in [0, 1]       (``panel_efficiency``)
+        i           sun-to-panel-normal incidence angle, deg  (derived)
+        el          sun elevation above local horizontal, deg (``sun_elevation_deg``)
+        az_sun      sun azimuth clockwise from north, deg     (``sun_azimuth_deg``)
+        beta        panel tilt off horizontal, deg in [0, 90] (``panel_tilt_deg``)
+        psi         panel azimuth clockwise from north, deg   (``panel_azimuth_deg``)
+        dust_factor optical dust degradation, in [0, 1]       (``dust_degradation_factor``)
 
     Returns 0 W when the sun is at or below the horizon (night). ``cos(i)``
     is also clamped at 0 so a back-illuminated panel does not produce
