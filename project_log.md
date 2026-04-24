@@ -95,3 +95,76 @@ therefore assert ``|DP(0)| ≪ |DP(0.3)|`` rather than ``DP(0) < 0``.
   (`UP037` quoted self-type annotations, `F401` unused `numpy`
   imports). Baseline is now lint-clean.
 - Ready to move on to Week 2: PyChrono SCM harness + go/no-go gate.
+
+## 2026-04-23 — PyChrono SCM single-wheel driver, Week-2 go/no-go: **GO**
+
+**Decision.** `roverdevkit.terramechanics.pychrono_scm.single_wheel_forces_scm`
+is implemented and validated. Path 2 of the three-path data generation
+strategy (project_plan.md §5) is **confirmed feasible**; no need to
+retreat to a pure-analytical + empirical-correction plan.
+
+**Context.** The plan (§6 W2) gates Path 2 on wall-clock ≤ 10 s per
+simulated wheel-second. Measured on the dev M-series laptop across
+four fidelity configurations at Apollo-regolith nominal soil, 30 N
+vertical load, slip = 0.2, R = 0.1 m, b = 0.06 m:
+
+| config | mesh δ (mm) | drive (s) | wall / sim (×real) |
+| --- | --- | --- | --- |
+| fast    | 20 | 0.8 | 0.06 |
+| default | 15 | 1.5 | 0.08 |
+| high-fi | 10 | 2.0 | 0.17 |
+| ultra   |  6 | 2.0 | 0.46 |
+
+Even the **ultra** config runs at **0.46 s per wheel-second — a 22× margin**
+under the 10 s budget. DP varies by <5 % across all four configs, so the
+default δ = 15 mm is good enough for calibration data.
+
+**Cross-check against the analytical model** at the same operating
+point: analytical DP = 2.9 N, SCM DP ≈ 8.9 N; analytical T = 1.19 N·m,
+SCM T = 1.43 N·m; analytical sinkage = 19.7 mm, SCM sinkage = 11.5 mm.
+Both models agree on sign and order of magnitude; the factor-of-three
+DP gap is exactly the kind of systematic offset the Path-2 correction
+layer will learn in Week 5. All six `test_pychrono_scm.py` tests pass
+in ~1.5 s under `pytest -m 'chrono and slow'`.
+
+**Engineering nits we spent time on.**
+
+- The osx-arm64 conda-forge PyChrono build has undefined Intel-OMP
+  symbols (`__kmpc_dispatch_init_4`, etc.) in `libChrono_core.dylib`
+  that aren't resolved via a `NEEDED` entry. We preload
+  `libiomp5.dylib` via `ctypes.CDLL(..., RTLD_GLOBAL)` at module
+  import time. Self-contained fix; no env-var gymnastics.
+- The wheel needs a **collision shape** — pass `create_collision=True`
+  and a `ChContactMaterialSMC` to `ChBodyEasyCylinder`, plus
+  `EnableCollision(True)`. Without it SCM silently can't find the
+  wheel and the whole sim runs at 0 contact force.
+- All three of `ChLinkMotorLinearSpeed`, `ChLinkLockPrismatic`, and
+  `ChLinkMotorRotationSpeed` use the **joint frame's local Z-axis**
+  as their primary axis. Doc claims that linear motors use X are
+  **wrong** in at least the 10.0.0 conda-forge build; verified
+  empirically. Consequence: the X-motion motor frame needs
+  `QuatFromAngleY(π/2)` to redirect local Z → world X.
+- Sign of the rotation motor: with the Y-axis frame built from
+  `QuatFromAngleX(−π/2)`, positive motor input produces positive
+  world ω_y, which is forward rolling for a wheel translating in
+  +X. Wrong sign saturates DP at the Mohr-Coulomb friction limit
+  (μ·W) — that's the diagnostic.
+
+**Consequences.**
+
+- Single-wheel SCM is ready to feed Week 5's correction-layer
+  calibration dataset.
+- Path-2 data budget for calibration: at ~0.5 s per operating point
+  (default config, 1.5 s drive), even 10k samples is a couple of
+  hours sequential / 20 min on 4 cores. Plan's 2,000-sample budget
+  (§5) is comfortable.
+- New file `roverdevkit/terramechanics/pychrono_scm.py`; the
+  pre-existing stub `scm_wrapper.py` is retained as the planned
+  home for the Week-7 batch-orchestration layer (parallel runs,
+  CSV I/O, resumable work queue).
+- Tests: `tests/test_pychrono_scm.py` (6 tests, all marked
+  `chrono`+`slow`, skipped in the default fast loop).
+- Fast-loop status: `pytest -q` → **26 passed, 4 xfailed**.
+  Slow loop: `pytest -m 'chrono and slow'` → **6 passed**.
+  Ruff + mypy both clean.
+
