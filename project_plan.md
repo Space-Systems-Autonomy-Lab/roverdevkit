@@ -199,21 +199,34 @@ This is the most important week of the project. If the evaluator can't reproduce
 ### Phase 2: Data Generation and Surrogate (Weeks 6–9)
 
 **Week 6: Analytical dataset (Path 1) and baseline surrogates.**
-- LHS sample 50,000 design vectors across all four mission scenarios. Run the analytical evaluator. This should complete in a few hours.
-- Train baselines: linear regression, random forest, XGBoost, small NN. Multi-output models predicting all mission metrics simultaneously.
-- 80/10/10 train/val/test split, evaluate R² and RMSE per output.
-- **Deliverable:** Baseline surrogate accuracy table. Target: R² > 0.95 on range and energy margin (these are smooth functions of inputs); R² > 0.85 on slope capability (more nonlinear).
+
+The original plan assumed ~50 ms per evaluation giving "50,000 LHS samples in an afternoon." Measured cost is ~1.4 s per evaluation (1.6 s on long equatorial missions, 3.2 s on polar), roughly 30× slower. The schedule, dataset size, and surrogate architecture below are adjusted for that reality and for Week-5/5.5/5.6 carry-over (unclipped energy margin, capability-envelope framing, lowered duty-cycle floor).
+
+- **LHS sampling.** Stratified by `n_wheels ∈ {4, 6}` (only 2 levels, naive LHS undersamples). Continuous variables sampled via `scipy.stats.qmc.LatinHypercube`; integer variables (`grouser_count`) rounded from continuous samples; `n_wheels` split 50/50 across strata. Scenario parameters (latitude, Bekker soil params c / φ / kc / kφ / n, mission duration, max slope) sampled jointly so the model learns a single cross-scenario function instead of four per-scenario models. Record seed and sampler config in dataset metadata.
+- **Dataset size.** Start with a **pilot run of 2k samples** (~5 min with 8 workers) to verify the pipeline and catch schema / NaN / multiprocessing bugs cheaply. Full run targets **10k per scenario × 4 scenarios = 40k rows** (~2 h with 8 workers). Scale to 20k/scenario only if the pilot surrogate misses the R² targets on range or energy margin.
+- **Dataset schema (extensibility for W7/W8).** Each row stores: design vector (12 fields), scenario parameters as continuous features (not one-hot of simulant names), raw `MissionMetrics`, and a `fidelity: "analytical"` tag so SCM-corrected runs can be appended later. Also store aggregate sub-model statistics (peak / mean / P95 of wheel drawbar pull, sinkage, motor torque, solar power, battery SOC) so a wheel-level SCM correction in W8 can re-derive corrected mission metrics without re-running the full traverse on 40k designs. Written as Parquet to `data/analytical/lhs_v1.parquet`.
+- **Regression targets.** `range_km` (capability at designed duty, per Week 5.6), `energy_margin_raw_pct` (unclipped, per Week 5.5 — the plan originally specified the clipped `energy_margin_pct` but that saturates across much of the design space), `slope_capability_deg`, `total_mass_kg`. The clipped reporting metric is derived post-hoc from the raw prediction.
+- **Feasibility: two-stage classifier + regressor.** Booleans `thermal_survival` and `motor_torque_ok` are trained as a feasibility classifier (XGBoost / logistic), with the regressor trained on the feasible subset. This gives honest feasibility probabilities for the Week-11 NSGA-II constraint layer and keeps the regressor from wasting capacity on the `range_km = 0` failure mode.
+- **Baselines.** Ridge linear, random forest, XGBoost, small MLP. Multi-output across the four regression targets. 80/10/10 train/val/test split stratified by scenario.
+- **Evaluation.** Report R² / RMSE / MAPE per target, broken out both aggregate and per-scenario (catches cases where the model is great on equatorial and terrible on polar). AUC / F1 for the feasibility classifier. Plus a **registry-rover sanity check**: predict metrics for Pragyan / Yutu-2 / Sojourner against their registry design vectors and compare surrogate predictions to the evaluator's own predictions (Layer-1, not Layer-4). Guards against the surrogate doing well on IID LHS but being wrong exactly where we validate.
+- **Target accuracy (unchanged from original plan).** R² > 0.95 for range and raw energy margin; R² > 0.85 for slope capability; AUC > 0.90 for feasibility.
+- **Deliverable:** `roverdevkit/surrogate/{sampling,dataset,baselines,metrics}.py`, `data/analytical/lhs_v1.parquet` with version metadata, `notebooks/02_baseline_surrogates.ipynb` with the aggregate + per-scenario accuracy table and registry sanity check, CI gates on sampling reproducibility and a pilot-scale fit smoke test.
 
 **Week 7: PyChrono SCM data generation (Path 2) — if active.**
 - If PyChrono is working: write the SCM single-wheel simulation wrapper, generate 2,000 strategically-sampled SCM runs (focus on grousered wheels, high slip, sloped terrain). Use `multiprocessing` with 4–5 parallel workers, run overnight and on weekends.
 - If PyChrono is not working: skip ahead to physics-informed feature engineering instead. Engineer features like dimensionless sinkage `z/R`, effective contact area `R*W`, grouser volume fraction, etc. These boost accuracy of the analytical surrogate measurably.
 - **Deliverable:** Either 2,000 SCM runs in `data/scm/` or a feature-engineered analytical surrogate with improved accuracy.
 
-**Week 8: Multi-fidelity surrogate (or refined single-fidelity).**
-- If SCM data is available: train a correction model that predicts (SCM output − Bekker-Wong output) as a function of inputs. Compose: `final_prediction = analytical + correction`. This is a much easier learning problem than learning SCM from scratch.
-- If not: do hyperparameter tuning with Optuna on the analytical surrogate, add uncertainty quantification (quantile regression for trees, MC dropout or deep ensembles for NNs).
-- Either way: implement and calibrate prediction intervals. Check that 90% PIs cover ~90% of test points.
-- **Deliverable:** Final surrogate with calibrated uncertainty.
+**Week 7.5: SCM correction-magnitude gate (new).**
+Before committing to a multi-fidelity composition in Week 8, measure how much SCM actually moves the mission-level answer. Apply the Week-7 wheel-level SCM correction to a 500-sample validation subset drawn from the Week-6 LHS parquet (re-derived via the stored sub-model statistics, not re-run from scratch), compare corrected `MissionMetrics` against the analytical baseline, and decide:
+- If median `|Δrange_km| / range_km < 10%` *and* no systematic sign bias: treat SCM as a **layered adjustment** — keep the Week-6 surrogate as-is and report correction as a sensitivity column in the Week-9 error budget.
+- If the correction is larger or systematically biased: **regenerate** the LHS dataset with correction applied (overnight re-run of 40k designs) and retrain the surrogate.
+This gate keeps the architecture cheap when corrections are small and promotes it to a full multi-fidelity surrogate only when corrections actually matter. The decision and its evidence go in `project_log.md`.
+
+**Week 8: Final surrogate with uncertainty quantification.**
+- Whichever path the Week-7.5 gate chose: do hyperparameter tuning with Optuna, add uncertainty quantification (quantile regression for XGBoost, MC dropout or small deep ensemble for the MLP), and calibrate prediction intervals. Check that 90% PIs cover ~90% of held-out test points.
+- If Week-7.5 said "regenerate," finalise the composed multi-fidelity surrogate here; if it said "layered adjustment," add a correction-magnitude sensitivity column to the reported accuracy table.
+- **Deliverable:** Final surrogate with calibrated uncertainty and a clear decision record on the multi-fidelity question.
 
 **Week 9: External validation against published experimental data.**
 - Layer the validations explicitly:
@@ -471,8 +484,9 @@ RoverDevKit: ML-Accelerated Co-Design of Mobility and Power for Lunar Micro-Rove
 - [ ] Week 3: Mass model and published rover database complete
 - [ ] Week 4: Mission evaluator end-to-end functional
 - [ ] Week 5: Real rover validation complete (critical gate)
-- [ ] Week 6: Analytical dataset generated, baseline surrogates trained
+- [ ] Week 6: Analytical dataset (40k rows, pilot-gated) generated, baseline surrogates trained, feasibility classifier trained, registry-rover sanity check passed
 - [ ] Week 7: SCM data generated (if active) or feature engineering complete
+- [ ] Week 7.5: SCM correction-magnitude gate decided; layered vs regenerate path recorded in project log
 - [ ] Week 8: Final surrogate with uncertainty quantification
 - [ ] Week 9: Layered validation complete with error budget
 - [ ] Week 10: Tradespace sweep tool functional

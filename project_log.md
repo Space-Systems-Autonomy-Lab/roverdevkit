@@ -682,3 +682,82 @@ worth calling out explicitly.
 - Full suite: 201 tests, 1 xfail (4 new utilisation-helper tests on
   top of Week-5.5).
 
+## 2026-04-24 — Week 6 plan revision and W7.5 gate added
+
+**Decision.** Revise the Week 6 plan in `project_plan.md` to reflect
+Weeks 5/5.5/5.6 carry-over, the measured evaluator cost, and a
+feasibility-classifier two-stage model. Insert a new "Week 7.5" gate
+between SCM data generation and the final surrogate, so the
+multi-fidelity composition is promoted to a full dataset regeneration
+only when the SCM correction is actually large at mission level.
+
+**Context.** The plan-as-written assumed ~50 ms per evaluation; measured
+cost is ~1.4 s mean (0.24 s highland, 3.2 s polar). That turns the
+"50 k samples in an afternoon" promise into a 78 CPU-hour commitment,
+which isn't acceptable when we haven't yet verified the LHS pipeline
+end-to-end. Separately, Week 5.5 added `energy_margin_raw_pct` and
+Week 5.6 reframed `range_km` as a capability envelope -- the Week 6
+regression targets need to update to match. Finally, the Booleans
+`thermal_survival` / `motor_torque_ok` can't be regressed cleanly; a
+feasibility classifier with a conditional regressor is the standard
+two-stage pattern and is what the Week-11 NSGA-II constraint layer
+actually wants anyway.
+
+**What changed in `project_plan.md`.**
+
+- Dataset size and process: 2 k-sample pilot to shake the pipeline
+  before committing to the full 40 k (10 k × 4 scenarios); scale to
+  20 k / scenario only if pilot R² misses targets.
+- LHS sampling: stratified by `n_wheels ∈ {4, 6}`; scenarios sampled
+  jointly as a single cross-scenario model with continuous Bekker
+  soil params (not one-hot simulant names).
+- Targets: `range_km`, `energy_margin_raw_pct` (unclipped, not the
+  clipped version in the original plan), `slope_capability_deg`,
+  `total_mass_kg`. Clipped reporting metric is derived post-hoc.
+- Two-stage feasibility: classifier (AUC > 0.90 target) + conditional
+  regressor on feasible designs; Booleans are out of the regression
+  targets.
+- Evaluation: per-scenario R² / RMSE / MAPE in addition to aggregate,
+  plus a registry-rover sanity check (Pragyan / Yutu-2 / Sojourner:
+  surrogate prediction vs evaluator prediction, a Layer-1 check
+  distinct from Week 5's Layer-4).
+- Dataset schema extensibility: `fidelity` column from day one;
+  per-design aggregate sub-model statistics (peak/mean/P95 drawbar
+  pull, sinkage, motor torque, solar power, battery SOC) so SCM
+  corrections can rederive corrected mission metrics without
+  re-running the traverse on 40 k designs.
+- New Week 7.5 gate: "measure correction magnitude before committing
+  to multi-fidelity." If median `|Δrange_km| / range_km < 10%` and
+  no systematic sign bias, keep Week-6 surrogate and report
+  correction as a sensitivity column. Otherwise regenerate the LHS
+  parquet with correction applied (overnight re-run) and retrain.
+- Milestones checklist updated accordingly.
+
+**Context for sequencing.** Considered whether to front-load PyChrono
+SCM correction into Week 6 so the surrogate is trained once on
+corrected data. Rejected because: (a) PyChrono is only provisionally
+go from the Week-2 gate -- not yet proven end-to-end on M2 -- so
+front-loading it risks stalling Weeks 6-8; (b) SCM correction is a
+wheel-level delta applied inside the evaluator, so architecturally it
+slots in behind the surrogate regardless of when it's trained;
+(c) Week-5 real-rover validation already works at published
+tolerances on raw Bekker-Wong at typical-ops slopes, weak evidence
+that mission-level corrections will be modest on most designs. The
+three-path strategy's whole point is that Path 1 works standalone
+even if Path 2 falls over.
+
+**Consequences.**
+
+- Week 6 is now a crisply-scoped implementation task: LHS sampler,
+  parallel dataset builder, baseline trainers, evaluation metrics,
+  notebook. Nothing waits on PyChrono.
+- Week 7.5 becomes the decision point for the multi-fidelity paper
+  claim. Either outcome is publishable: large correction ⇒ "multi-
+  fidelity surrogate captures SCM corrections missed by Bekker-Wong";
+  small correction ⇒ "analytical surrogate is sufficient for mission-
+  level tradespace, with SCM quantified as a bounded sensitivity."
+- The Week-6 dataset design (aggregate sub-model stats per row) is
+  what makes the W7.5 gate cheap enough to actually run. Without
+  those stats, the W7.5 correction would force a 40 k regeneration
+  just to measure its own magnitude.
+
