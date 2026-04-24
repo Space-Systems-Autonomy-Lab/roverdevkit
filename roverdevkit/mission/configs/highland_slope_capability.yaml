@@ -1,9 +1,14 @@
 # Scenario 3 — highland slope capability, up to 25° slopes.
 # See project_plan.md §3.2. Optimizer objective is usually min-mass
 # subject to slope-capability ≥ max_slope_deg.
+#
+# `traverse_distance_m` is non-binding (see equatorial_mare_traverse).
+# 20 km is well above the 7-day theoretical reach (~36 km) for most
+# designs once the 25° slope + loose soil combination bites. Range
+# stays dominated by slope physics, not the distance cap.
 name: highland_slope_capability
 latitude_deg: 10.0
-traverse_distance_m: 500.0
+traverse_distance_m: 20000.0
 terrain_class: highland_dense
 soil_simulant: Apollo_regolith_loose    # worst-case soil for slope climbing
 mission_duration_earth_days: 7.0

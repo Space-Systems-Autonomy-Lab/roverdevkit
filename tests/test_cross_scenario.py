@@ -130,3 +130,28 @@ def test_bigger_battery_never_decreases_energy_margin() -> None:
     """More stored energy can only help energy-margin, all else equal."""
     entry = _sens_by_var()["battery_capacity_wh"]
     assert entry.delta_energy_margin_pct >= -1e-6  # type: ignore[attr-defined]
+
+
+# ---------------------------------------------------------------------------
+# Raw (unclipped) energy-margin invariants
+# ---------------------------------------------------------------------------
+# The clipped SOC-based margin saturates at 0 % and 100 %; the raw
+# integrated-energy margin must remain sensitive to generation /
+# consumption levers even in saturated regimes. These tests guard the
+# Phase-2 surrogate-training signal added in schema.MissionMetrics.
+
+
+def test_raw_energy_margin_strictly_increases_with_solar_area() -> None:
+    """Bigger solar area on a saturated-margin baseline: clipped metric
+    may read +0.00 but the integrated-energy margin must be strictly
+    positive, because more generation against the same consumption can
+    only grow the surplus."""
+    entry = _sens_by_var()["solar_area_m2"]
+    assert entry.delta_energy_margin_raw_pct > 1e-6  # type: ignore[attr-defined]
+
+
+def test_raw_energy_margin_strictly_decreases_with_avionics_power() -> None:
+    """Parasitic load must drop the integrated-energy margin; this is
+    the main Phase-2 signal the surrogate will learn."""
+    entry = _sens_by_var()["avionics_power_w"]
+    assert entry.delta_energy_margin_raw_pct < -1e-6  # type: ignore[attr-defined]

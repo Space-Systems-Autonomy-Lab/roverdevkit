@@ -1,8 +1,14 @@
 # Scenario 2 — high-latitude prospecting, long shadows, intermittent sun.
 # See project_plan.md §3.2.
+#
+# `traverse_distance_m` is non-binding (see equatorial_mare_traverse).
+# 30 km is well below the 30-day theoretical reach (~150 km) but above
+# what even the best polar designs will achieve once the intermittent
+# sun schedule and the high-latitude penalty cut effective duty, so
+# range stays energy-/duty-bound rather than distance-capped.
 name: polar_prospecting
 latitude_deg: -85.0
-traverse_distance_m: 2000.0
+traverse_distance_m: 30000.0
 terrain_class: polar_regolith
 soil_simulant: Apollo_regolith_nominal
 mission_duration_earth_days: 30.0

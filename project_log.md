@@ -572,3 +572,55 @@ RHU-absent architecture were both correct by construction.
   `MissionScenario.name` accepts validation scenarios. The tradespace
   optimiser's scenario sweep stays closed.
 
+### Week 5.5 (polish): pre-Phase-2 evaluator signal fixes
+
+Brief pass after the Week-5 retrospective identified two places where
+the evaluator's output would saturate under the LHS sweep Week 6 needs
+to kick off. Both are low-effort, high-payoff fixes.
+
+**What changed.**
+
+- `MissionMetrics` gains an unclipped companion to `energy_margin_pct`:
+  `energy_margin_raw_pct = (E_generated - E_consumed) / E_consumed * 100`,
+  integrated over the full traverse via `numpy.trapezoid`. Unbounded in
+  both directions -- negative means net energy deficit, positive means
+  surplus generation. The original SOC-based metric stays for human
+  reporting / acceptance gates; the raw metric is what the Week-6
+  surrogate will be trained on. Fixes the "solar bump shows `+0.00`"
+  rows in the Week-5 sensitivity table.
+- `SensitivityEntry` and the notebook's section 6 table now expose
+  `delta_energy_margin_raw_pct` alongside the clipped delta. Every one
+  of the seven sensitivity bumps now produces a non-zero response with
+  the physically expected sign (solar → +428 %, avionics → −228 %,
+  speed → −3.7 %, etc.). Two new CI tests enforce the strict-sign
+  invariants (solar positive, avionics negative) on the raw metric.
+- Canonical scenario YAMLs: `traverse_distance_m` raised from
+  short-mission budgets (0.5-5 km) to non-binding caps at the
+  mission-duration × max-speed × max-duty theoretical reach
+  (20-80 km). Range now differentiates archetypes on the cross-scenario
+  ranking: `equatorial_mare_traverse` goes from a 3-way tie at 5 km
+  to 48.4 / 4.8 / 14.5 km for `large_traverser` / `polar_survivor` /
+  `slope_climber`. Validation scenarios (Pragyan / Yutu-2 / Sojourner)
+  keep their short-mission caps because they're being compared against
+  specific published traverses.
+- Two notebook documentation additions: a 7th known-limitation bullet
+  making the per-rover panel-efficiency / dust-factor / thermal-
+  architecture calibration explicit (these are effective-parameter
+  matches to vendor datasheets, not independent validation of the
+  solar-geometry and Stefan-Boltzmann math underneath), and an 8th
+  explaining the raised non-binding canonical caps. Week-9 error-
+  budget deliverable should separate calibrated-layer vs validated-
+  layer claims cleanly.
+
+**Impact on Phase 2.**
+
+- Surrogate targets `range_km`, `energy_margin_raw_pct`, and
+  `slope_capability_deg` now all respond smoothly to at least 5 of the
+  7 primary design levers across canonical scenarios, instead of
+  collapsing to two training axes (speed, duty) plus a slope-only
+  signal. This is what "Target: R² > 0.95 on range and energy margin"
+  from project_plan.md §6 W6 needs to be a meaningful target rather
+  than "we predicted the distance cap correctly."
+- Full suite still passes (197 tests, 1 xfail). Two new tests added
+  on top of the Week-5 gates.
+

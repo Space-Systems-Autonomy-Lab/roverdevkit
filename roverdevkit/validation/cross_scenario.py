@@ -151,13 +151,22 @@ def rank_archetypes() -> dict[str, ArchetypeRanking]:
 
 @dataclass(frozen=True)
 class SensitivityEntry:
-    """Effect of bumping one design variable from baseline."""
+    """Effect of bumping one design variable from baseline.
+
+    ``delta_energy_margin_raw_pct`` is the unclipped companion of
+    ``delta_energy_margin_pct`` (see
+    :class:`roverdevkit.schema.MissionMetrics`) and is what picks up
+    changes even when the SOC-based margin has saturated at 0 % or
+    100 %. Both are reported so the table shows whether a saturated
+    reporting metric is hiding real signal underneath.
+    """
 
     variable: str
     baseline_value: float
     bumped_value: float
     delta_range_km: float
     delta_energy_margin_pct: float
+    delta_energy_margin_raw_pct: float
     delta_slope_capability_deg: float
     delta_total_mass_kg: float
 
@@ -252,6 +261,9 @@ def one_at_a_time_sensitivity(
                 delta_range_km=bumped_metrics.range_km - base_metrics.range_km,
                 delta_energy_margin_pct=(
                     bumped_metrics.energy_margin_pct - base_metrics.energy_margin_pct
+                ),
+                delta_energy_margin_raw_pct=(
+                    bumped_metrics.energy_margin_raw_pct - base_metrics.energy_margin_raw_pct
                 ),
                 delta_slope_capability_deg=(
                     bumped_metrics.slope_capability_deg - base_metrics.slope_capability_deg

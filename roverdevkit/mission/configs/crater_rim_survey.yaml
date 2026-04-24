@@ -1,8 +1,12 @@
 # Scenario 4 — crater rim survey, short traverse, lots of slope changes.
 # See project_plan.md §3.2. Optimizer objective is energy-optimal traverse.
+#
+# `traverse_distance_m` is non-binding (see equatorial_mare_traverse).
+# 25 km is just below the 5-day theoretical reach at max speed / duty
+# (~25.9 km); this keeps range energy-/duty-bound across the LHS sweep.
 name: crater_rim_survey
 latitude_deg: 0.0
-traverse_distance_m: 1000.0
+traverse_distance_m: 25000.0
 terrain_class: mare_nominal
 soil_simulant: Apollo_regolith_nominal
 mission_duration_earth_days: 5.0

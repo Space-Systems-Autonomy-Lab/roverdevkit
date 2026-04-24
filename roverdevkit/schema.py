@@ -104,6 +104,15 @@ class MissionMetrics(BaseModel):
     energy_margin_pct: float
     slope_capability_deg: float
 
+    # Unclipped energy-balance signal for the surrogate. Defined as
+    # ``(E_generated - E_consumed) / E_consumed * 100``, integrated over
+    # the whole traverse. Unlike ``energy_margin_pct`` (SOC-based, clipped
+    # at 0-100), this one is unbounded on both sides: negative means the
+    # rover consumed more than it generated, >100 means surplus exceeded
+    # consumption. Kept as a separate field so Week-6 LHS surrogates see
+    # a smooth target; reporting gates keep using the clipped version.
+    energy_margin_raw_pct: float = 0.0
+
     # Secondary metrics
     total_mass_kg: float
     peak_motor_torque_nm: float

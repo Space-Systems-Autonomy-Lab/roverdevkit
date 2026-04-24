@@ -95,12 +95,39 @@ def _energy_margin_pct(log: TraverseLog, min_soc: float) -> float:
     the floor. Defined as ``(SOC_end - min_SOC) / (1 - min_SOC) * 100``
     with a clamp at 0 so unsurvivable missions return 0 rather than a
     negative number.
+
+    This is the **reporting** metric (clipped, monotonically interpretable).
+    For the surrogate-training signal that does not saturate at 0/100, see
+    :func:`_energy_margin_raw_pct`.
     """
     if log.state_of_charge.size == 0:
         return 0.0
     soc_end = float(log.state_of_charge[-1])
     span = max(1e-9, 1.0 - min_soc)
     return max(0.0, (soc_end - min_soc) / span * 100.0)
+
+
+def _energy_margin_raw_pct(log: TraverseLog) -> float:
+    """Mission-integrated energy balance as a percentage of consumption.
+
+    Defined as ``(E_generated - E_consumed) / E_consumed * 100``,
+    unbounded on both sides. Negative ⇒ net energy deficit; >0 ⇒ surplus
+    generation. Used by the Phase-2 surrogate because it does not
+    saturate when SOC sits at 1.0 (benign scenarios) or at the DoD floor
+    (polar night), unlike :func:`_energy_margin_pct`.
+
+    Computed via trapezoidal integration of the traverse log's
+    ``power_in_w`` (solar input) and ``power_out_w`` (avionics +
+    mobility). Time is assumed monotonic and in seconds.
+    """
+    if log.t_s.size < 2:
+        return 0.0
+    t = log.t_s
+    e_in_wh = float(np.trapezoid(log.power_in_w, t)) / 3600.0
+    e_out_wh = float(np.trapezoid(log.power_out_w, t)) / 3600.0
+    if e_out_wh <= 1e-9:
+        return 0.0
+    return (e_in_wh - e_out_wh) / e_out_wh * 100.0
 
 
 def evaluate(
@@ -204,6 +231,7 @@ def evaluate(
     # 6. Aggregate.
     range_km = float(log.position_m[-1]) / 1000.0
     energy_margin_pct = _energy_margin_pct(log, min_soc=0.15)
+    energy_margin_raw_pct = _energy_margin_raw_pct(log)
     peak_torque_nm = float(np.max(np.abs(log.wheel_torque_nm))) if log.wheel_torque_nm.size else 0.0
     sinkage_max_m = float(np.max(log.sinkage_m)) if log.sinkage_m.size else 0.0
 
@@ -219,6 +247,8 @@ def evaluate(
         range_km = 0.0
     if not math.isfinite(energy_margin_pct):
         energy_margin_pct = 0.0
+    if not math.isfinite(energy_margin_raw_pct):
+        energy_margin_raw_pct = 0.0
     if not math.isfinite(peak_torque_nm):
         peak_torque_nm = 0.0
     if not math.isfinite(sinkage_max_m):
@@ -228,6 +258,7 @@ def evaluate(
         range_km=range_km,
         energy_margin_pct=energy_margin_pct,
         slope_capability_deg=slope_capability,
+        energy_margin_raw_pct=energy_margin_raw_pct,
         total_mass_kg=total_mass_kg,
         peak_motor_torque_nm=peak_torque_nm,
         sinkage_max_m=sinkage_max_m,
