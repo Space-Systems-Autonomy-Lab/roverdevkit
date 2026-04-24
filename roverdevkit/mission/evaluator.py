@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -74,8 +75,25 @@ from roverdevkit.power.thermal import (
     survives_mission,
 )
 from roverdevkit.schema import DesignVector, MissionMetrics, MissionScenario
-from roverdevkit.terramechanics.bekker_wong import WheelGeometry
+from roverdevkit.terramechanics.bekker_wong import SoilParameters, WheelGeometry
 from roverdevkit.terramechanics.soils import get_soil_parameters
+
+
+@dataclass(frozen=True)
+class DetailedEvaluation:
+    """Full evaluator output: headline metrics plus supporting artefacts.
+
+    Returned by :func:`evaluate_verbose`. Phase-2 dataset generation needs
+    the :class:`TraverseLog` so it can compute aggregate sub-model stats
+    (peak/mean/p95 of drawbar pull, sinkage, motor torque, solar power,
+    battery SOC) that the single-scalar :class:`MissionMetrics` does not
+    expose. The :class:`MassBreakdown` is kept alongside so per-subsystem
+    mass is recoverable without re-running the mass model.
+    """
+
+    metrics: MissionMetrics
+    log: TraverseLog
+    mass: MassBreakdown
 
 
 def _sizing_peak_torque_nm(
@@ -143,16 +161,22 @@ def _energy_margin_raw_pct(log: TraverseLog) -> float:
     return (e_in_wh - e_out_wh) / e_out_wh * 100.0
 
 
-def evaluate(
+def evaluate_verbose(
     design: DesignVector,
     scenario: MissionScenario,
     *,
     mass_params: MassModelParams | None = None,
     thermal_architecture: ThermalArchitecture | None = None,
     gravity_m_per_s2: float | None = None,
+    soil_override: SoilParameters | None = None,
     use_scm_correction: bool = False,
-) -> MissionMetrics:
-    """Run the full mission evaluator on one design in one scenario.
+) -> DetailedEvaluation:
+    """Full evaluator: headline metrics plus traverse log and mass breakdown.
+
+    Same physics pipeline as :func:`evaluate`, but returns the supporting
+    artefacts needed by the Phase-2 dataset builder (aggregate sub-model
+    statistics from the :class:`TraverseLog`) and per-subsystem mass
+    introspection for validation.
 
     Parameters
     ----------
@@ -161,45 +185,36 @@ def evaluate(
     scenario
         Mission context (latitude, terrain, distance, sun geometry).
     mass_params
-        Optional :class:`MassModelParams` override; defaults to the
-        calibrated values in the mass module.
+        Optional :class:`MassModelParams` override.
     thermal_architecture
-        Optional override. If ``None``, a default enclosure is built
-        from a fraction of the chassis using
+        Optional :class:`ThermalArchitecture` override. If ``None``, a
+        default enclosure is built from a fraction of the chassis using
         :func:`default_architecture_for_design`.
     gravity_m_per_s2
-        Surface gravity override. Defaults to
-        ``mass_params.gravity_moon_m_per_s2`` (lunar). Used by the
-        Week-5 validation harness to evaluate Sojourner under Mars
-        gravity; normal tradespace calls should leave this None.
+        Surface gravity override (e.g. Mars for Sojourner validation).
+    soil_override
+        Optional :class:`SoilParameters` to use instead of the
+        catalogue lookup on ``scenario.soil_simulant``. The Phase-2
+        LHS sweep uses this to inject per-sample jittered Bekker
+        parameters so the surrogate learns a continuous soil → metric
+        mapping instead of a four-category one
+        (``project_plan.md`` §6).
     use_scm_correction
-        If True, apply the learned Bekker-Wong -> SCM correction
-        (Path 2). Requires the correction model to be loaded. Default
-        False so the analytical path always works; wired up in Week 7.
-
-    Returns
-    -------
-    MissionMetrics
-        Pydantic frozen model summarising mission-level performance.
+        Reserved for Week 7; raises :class:`NotImplementedError`.
     """
     if use_scm_correction:
         raise NotImplementedError("SCM correction path is wired in Week 7 (project_plan.md §6).")
 
     mass_params = mass_params or MassModelParams()
-    # If the caller overrides gravity, rebuild mass_params so the mass
-    # model sizes motors against the correct planetary weight.
     if gravity_m_per_s2 is not None and not math.isclose(
         gravity_m_per_s2, mass_params.gravity_moon_m_per_s2
     ):
         mass_params = dataclasses.replace(mass_params, gravity_moon_m_per_s2=gravity_m_per_s2)
     active_g = mass_params.gravity_moon_m_per_s2
 
-    # 1. Mass model.
     breakdown: MassBreakdown = estimate_mass_from_design(design, params=mass_params)
     total_mass_kg = breakdown.total_kg
 
-    # 2. Thermal survival. Surface area proxy: ~half the chassis side
-    # area -- a defensible default for tradespace work; overridable.
     if thermal_architecture is None:
         # Rough enclosure surface-area proxy: scales with chassis mass
         # via a cube-root law (box side ~ mass^(1/3) * density^(-1/3)).
@@ -213,11 +228,10 @@ def evaluate(
         scenario.latitude_deg,
     )
 
-    # 3. Soil lookup.
-    soil = get_soil_parameters(scenario.soil_simulant)
+    soil = (
+        soil_override if soil_override is not None else get_soil_parameters(scenario.soil_simulant)
+    )
 
-    # 4. Slope capability. Independent of the scenario's nominal slope;
-    # reports what the design *can* do in this soil.
     wheel = WheelGeometry(
         radius_m=design.wheel_radius_m,
         width_m=design.wheel_width_m,
@@ -232,7 +246,6 @@ def evaluate(
         gravity_m_per_s2=active_g,
     )
 
-    # 5. Traverse.
     log = run_traverse(
         design,
         scenario,
@@ -241,7 +254,6 @@ def evaluate(
         gravity_m_per_s2=active_g,
     )
 
-    # 6. Aggregate.
     range_km = float(log.position_m[-1]) / 1000.0
     energy_margin_pct = _energy_margin_pct(log, min_soc=0.15)
     energy_margin_raw_pct = _energy_margin_raw_pct(log)
@@ -267,7 +279,7 @@ def evaluate(
     if not math.isfinite(sinkage_max_m):
         sinkage_max_m = 0.0
 
-    return MissionMetrics(
+    metrics = MissionMetrics(
         range_km=range_km,
         energy_margin_pct=energy_margin_pct,
         slope_capability_deg=slope_capability,
@@ -278,6 +290,36 @@ def evaluate(
         thermal_survival=thermal_ok,
         motor_torque_ok=motor_torque_ok,
     )
+    return DetailedEvaluation(metrics=metrics, log=log, mass=breakdown)
+
+
+def evaluate(
+    design: DesignVector,
+    scenario: MissionScenario,
+    *,
+    mass_params: MassModelParams | None = None,
+    thermal_architecture: ThermalArchitecture | None = None,
+    gravity_m_per_s2: float | None = None,
+    soil_override: SoilParameters | None = None,
+    use_scm_correction: bool = False,
+) -> MissionMetrics:
+    """Run the full mission evaluator on one design in one scenario.
+
+    Thin wrapper around :func:`evaluate_verbose` that discards the
+    :class:`TraverseLog` and :class:`MassBreakdown`. This is the
+    canonical public entry point; callers that need the supporting
+    artefacts (e.g. the Phase-2 dataset builder) should call
+    ``evaluate_verbose`` directly.
+    """
+    return evaluate_verbose(
+        design,
+        scenario,
+        mass_params=mass_params,
+        thermal_architecture=thermal_architecture,
+        gravity_m_per_s2=gravity_m_per_s2,
+        soil_override=soil_override,
+        use_scm_correction=use_scm_correction,
+    ).metrics
 
 
 def range_at_utilisation(

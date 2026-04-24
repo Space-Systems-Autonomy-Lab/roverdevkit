@@ -840,5 +840,95 @@ than retrofitting. Added those hooks to the Week-6 deliverables.
   (robotics, aerospace systems engineering), which roughly doubles
   reach per unit effort.
 
+---
+
+## 2026-04-24 — Week 6 step 1: LHS sampler, dataset builder, pilot run
+
+**Decision.** Ship the Phase-2 dataset-generation plumbing — stratified
+LHS sampler, parallel dataset builder with Parquet I/O and failure-
+tolerant row flattening, matching test suite, and column `SCHEMA.md` —
+as one coherent commit. Pilot-run validated end-to-end on 200 samples
+(100% success, all four scenario families, healthy target distributions).
+
+**Context.** Week 6 step 1 in the revised plan is "sampling.py +
+dataset.py + unit tests (pilot run with 2k samples works end-to-end)".
+Structuring it as a single commit keeps the dataset format, the
+generator that feeds it, and the schema doc in lockstep so downstream
+code can trust `SCHEMA_VERSION = v1` as an atomic promise. The
+benchmark-release hooks (canonical split column, `SCHEMA.md`) are
+baked in at this step rather than retrofitted in Week 6's later
+substeps, per the Phase-5 plan.
+
+**What shipped.**
+
+- `roverdevkit/surrogate/sampling.py` — stratified LHS over the 12-D
+  design space × 4 scenario families. 50/50 `n_wheels` strata per
+  family. Scenario perturbation columns (latitude, mission duration,
+  max slope, six Bekker params) sampled jointly with design variables
+  so the surrogate learns continuous scenario-to-metric mappings
+  instead of four-category ones. Deterministic splits (train/val/test)
+  assigned at sample time via a dedicated RNG so hold-out distribution
+  is stable even when some evaluations fail. `FAMILIES` dict codifies
+  per-family jitter ranges based on the canonical YAML configs plus
+  ±30-50% scenario-parameter spread.
+- `roverdevkit/surrogate/dataset.py` — `build_dataset` runs
+  `evaluate_verbose` through a `multiprocessing.spawn` pool and
+  flattens each result into a 65-column row (5 meta + 12 design + 15
+  scenario + 9 metric + 24 stat). Failures are captured as `status =
+  <ExceptionClass>` with NaN numeric columns rather than propagating
+  out. Parquet I/O uses zstd compression and writes a `DatasetMetadata`
+  block (seed, sampler config, fidelity, build timestamp, evaluator
+  version, notes) into the file footer.
+- `roverdevkit/mission/evaluator.py` refactored: extracted
+  `evaluate_verbose` returning `DetailedEvaluation(metrics, log, mass)`
+  so the dataset builder can compute aggregate traverse-log stats
+  without re-running physics. `evaluate` is now a thin wrapper; no
+  behavioural change. Also added `soil_override: SoilParameters | None`
+  kwarg so the sampler can inject jittered Bekker params per sample
+  instead of being stuck with the catalogue's four nominal soils.
+- `data/analytical/SCHEMA.md` — column-by-column documentation of the
+  dataset. `SCHEMA_VERSION = v1`. Bumping this is mandatory whenever
+  columns are added or renamed; downstream consumers can detect stale
+  files from the Parquet file-level metadata.
+- `tests/test_surrogate_sampling.py` (19 tests) and
+  `tests/test_surrogate_dataset.py` (15 tests, one marked `slow`):
+  shape / determinism / stratification / bounds / coverage / split
+  fractions for the sampler; schema / dtypes / metric ranges /
+  Parquet round-trip / failure-handling / serial-vs-parallel agreement
+  for the builder. Full project suite still green (235 passed).
+- `pyproject.toml`: added `pyarrow>=14`.
+- `.gitignore`: exempt `SCHEMA.md` from the `data/analytical/*` and
+  `data/scm/*` exclusions so documentation stays in git while the
+  actual parquet files don't.
+
+**Pilot run (200 samples, seed=42).** All four canonical families, 50
+samples each, 100% success, 41.7 s wall-clock on 9 workers (~0.21 s /
+sample effective). Target distributions look right: `range_km` spans 0
+to 69 km (not saturated), `energy_margin_raw_pct` spans -96% (deep
+energy deficit) to +4100% (solar-rich easy missions), `thermal_survival`
+varies across designs, split fractions match request. Extrapolation:
+40k rows at the same wall-clock rate ≈ 140 minutes, comfortably under
+the Week-6 day-1 compute budget. `data/analytical/lhs_pilot.parquet`
+(119 kB) is on disk locally; not committed (gitignored) since the
+pilot is reproducible from seed.
+
+**Consequences.**
+
+- Week 6 step 2 is unblocked: pilot XGBoost fit on
+  `lhs_pilot.parquet` can start immediately. I want to see range R² on
+  val before scaling to 40k.
+- The dataset format is now fixed. Any feature the baselines want that
+  isn't in the 65 columns requires a schema bump (`v1` -> `v2`).
+  Reviewed the stats columns carefully against the Week 7.5 SCM-
+  correction gate and the Phase-5 benchmark so we don't discover a
+  gap mid-training.
+- Capacity-wise, a 200-sample pilot parquet compresses to 119 kB, so
+  a 40k row parquet should land around 24 MB — comfortably small
+  enough to check into a release artefact (not the repo) at Phase 5.
+- The multiprocessing `spawn` context is chosen deliberately so the
+  pool works on macOS and isolates worker memory; this costs a few
+  hundred ms per worker at startup but is robust against the pydantic
+  model globals that `fork` would otherwise share.
+
 
 

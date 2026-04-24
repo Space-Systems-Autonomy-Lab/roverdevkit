@@ -62,8 +62,10 @@ coverage.xml
 # We keep the directory structure via .gitkeep files.
 data/analytical/*
 !data/analytical/.gitkeep
+!data/analytical/SCHEMA.md
 data/scm/*
 !data/scm/.gitkeep
+!data/scm/SCHEMA.md
 data/validation/raw/*
 !data/validation/raw/.gitkeep
 
