@@ -45,7 +45,19 @@ class DesignVector(BaseModel):
 
     # Operations
     nominal_speed_mps: float = Field(ge=0.01, le=0.10, description="Nominal drive speed v")
-    drive_duty_cycle: float = Field(ge=0.1, le=0.6, description="Fraction of mission-day driving δ")
+    drive_duty_cycle: float = Field(
+        ge=0.02,
+        le=0.6,
+        description=(
+            "Designed drive duty cycle δ: fraction of the mission the rover "
+            "is commanded to drive. The hardware (battery, thermal, avionics) "
+            "is sized to sustain this duty. Floor 0.02 captures real-ops "
+            "regimes (Pragyan ~0.02, Yutu-2 ~0.015, Sojourner ~0.01); ceiling "
+            "0.6 captures continuous-drive reference designs. Mission-ops "
+            "utilisation *below* designed duty is a post-hoc query, not a "
+            "design variable."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -95,14 +107,26 @@ class MissionScenario(BaseModel):
 
 
 class MissionMetrics(BaseModel):
-    """Mission-level outputs of the evaluator or surrogate."""
+    """Mission-level outputs of the evaluator or surrogate.
+
+    All fields describe the **capability envelope** of a design under its
+    own stated ``drive_duty_cycle`` and the scenario's mission window --
+    i.e. what the hardware could deliver if the ops schedule commanded
+    it to drive at the designed duty throughout. Real missions typically
+    command a fraction of the designed duty (Pragyan ~0.02, Yutu-2 ~0.015,
+    Sojourner ~0.01) for commanding / thermal-window / science-campaign
+    reasons; the "range at operational utilisation u" can be recovered
+    from ``range_km * u / drive_duty_cycle`` where ``u <= drive_duty_cycle``.
+    Phase-3 downstream ops-planning lives on top of this capability layer,
+    not inside it.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # Primary metrics
-    range_km: float
-    energy_margin_pct: float
-    slope_capability_deg: float
+    # Primary metrics - all are capability-at-designed-duty
+    range_km: float  # "range capability" over scenario duration at designed δ
+    energy_margin_pct: float  # SOC-based, clipped 0-100; reporting metric
+    slope_capability_deg: float  # max climbable slope on this soil
 
     # Unclipped energy-balance signal for the surrogate. Defined as
     # ``(E_generated - E_consumed) / E_consumed * 100``, integrated over

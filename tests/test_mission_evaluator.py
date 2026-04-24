@@ -15,7 +15,7 @@ import math
 
 import pytest
 
-from roverdevkit.mission.evaluator import evaluate
+from roverdevkit.mission.evaluator import evaluate, range_at_utilisation
 from roverdevkit.mission.scenarios import list_scenarios, load_scenario
 from roverdevkit.schema import DesignVector, MissionMetrics, MissionScenario
 
@@ -119,3 +119,70 @@ def test_scm_correction_not_yet_wired(
 ) -> None:
     with pytest.raises(NotImplementedError, match="SCM correction"):
         evaluate(rashid_like_design, equatorial_scenario, use_scm_correction=True)
+
+
+# ---------------------------------------------------------------------------
+# Capability-envelope vs operational-utilisation rescaling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.integration
+def test_range_at_utilisation_matches_capability_at_designed_duty(
+    rashid_like_design: DesignVector, equatorial_scenario: MissionScenario
+) -> None:
+    """Passing ``u = drive_duty_cycle`` reproduces the capability range."""
+    metrics = evaluate(rashid_like_design, equatorial_scenario)
+    rescaled = range_at_utilisation(
+        metrics, rashid_like_design, rashid_like_design.drive_duty_cycle
+    )
+    assert math.isclose(rescaled, metrics.range_km, rel_tol=1e-9)
+
+
+@pytest.mark.integration
+def test_range_at_utilisation_scales_linearly_with_duty(
+    rashid_like_design: DesignVector, equatorial_scenario: MissionScenario
+) -> None:
+    """Half the operational duty cycle -> half the rescaled range."""
+    metrics = evaluate(rashid_like_design, equatorial_scenario)
+    half_duty = 0.5 * rashid_like_design.drive_duty_cycle
+    rescaled = range_at_utilisation(metrics, rashid_like_design, half_duty)
+    assert math.isclose(rescaled, 0.5 * metrics.range_km, rel_tol=1e-9)
+
+
+@pytest.mark.integration
+def test_range_at_utilisation_rejects_over_duty(
+    rashid_like_design: DesignVector, equatorial_scenario: MissionScenario
+) -> None:
+    """Passing ``u`` above designed duty is a coding error (hardware not sized)."""
+    metrics = evaluate(rashid_like_design, equatorial_scenario)
+    with pytest.raises(ValueError, match="exceeds designed duty"):
+        range_at_utilisation(metrics, rashid_like_design, rashid_like_design.drive_duty_cycle + 0.1)
+
+
+def test_range_at_utilisation_rejects_negative() -> None:
+    metrics = MissionMetrics(
+        range_km=5.0,
+        energy_margin_pct=50.0,
+        slope_capability_deg=10.0,
+        total_mass_kg=15.0,
+        peak_motor_torque_nm=5.0,
+        sinkage_max_m=0.01,
+        thermal_survival=True,
+        motor_torque_ok=True,
+    )
+    design = DesignVector(
+        wheel_radius_m=0.12,
+        wheel_width_m=0.08,
+        grouser_height_m=0.008,
+        grouser_count=12,
+        n_wheels=6,
+        chassis_mass_kg=12.0,
+        wheelbase_m=0.6,
+        solar_area_m2=0.4,
+        battery_capacity_wh=100.0,
+        avionics_power_w=15.0,
+        nominal_speed_mps=0.02,
+        drive_duty_cycle=0.15,
+    )
+    with pytest.raises(ValueError, match=">= 0"):
+        range_at_utilisation(metrics, design, -0.01)

@@ -624,3 +624,61 @@ to kick off. Both are low-effort, high-payoff fixes.
 - Full suite still passes (197 tests, 1 xfail). Two new tests added
   on top of the Week-5 gates.
 
+### Week 5.6 (polish): capability envelope vs operational utilisation
+
+**Decision.** Reframe the evaluator's outputs as a *capability envelope*
+at the design vector's own `drive_duty_cycle`, not a prediction of
+operational range. Expose operational-utilisation queries as a separate,
+explicit post-hoc helper.
+
+**Context.** Real lunar rovers (Pragyan ~0.02, Yutu-2 ~0.015, Sojourner
+~0.01) command *well below* the `drive_duty_cycle >= 0.1` schema floor
+used for most of the project so far. That isn't because their hardware
+can't sustain higher duty -- it's because ops schedules carve the
+mission around uplink windows, thermal soaks, and science campaigns.
+Two problems followed: (a) the design-space sweep Week 6 kicks off
+couldn't even represent duty regimes where every real LPR we've
+validated against actually operates, so our validation residuals
+looked like pure physics overshoot when part of the gap was literally
+out-of-schema design space; and (b) new readers misread `range_km`
+as "what the rover will actually drive" rather than "what the
+hardware can sustain" -- a JPL Team X vs ops-schedule distinction
+worth calling out explicitly.
+
+**What changed.**
+
+- `DesignVector.drive_duty_cycle` floor dropped from 0.1 to 0.02, with
+  a docstring that pins the semantics ("designed duty the hardware is
+  sized to sustain") and cites the three real-rover data points. The
+  ceiling stays at 0.6 for continuous-drive reference designs.
+- `MissionMetrics` docstring now opens with a capability-envelope
+  framing paragraph, and each primary metric has a one-line
+  "capability-at-designed-duty" annotation. `range_km` is explicitly
+  not an operational prediction.
+- `evaluator.py` module docstring gains a full section on the envelope-
+  vs-utilisation distinction, including the linear rescaling formula.
+  The surrogate package docstring picks up a matching one-paragraph
+  framing so the Phase-2 ML layer inherits it.
+- New helper `evaluator.range_at_utilisation(metrics, design, u)`
+  rescales capability range to an operational duty. Raises
+  `ValueError` if `u > drive_duty_cycle` (hardware not sized) or
+  `u < 0`. Four unit tests cover identity at designed duty, linear
+  scaling at half duty, over-duty rejection, negative-duty rejection.
+- Notebook limitation #1 rewritten from "range predictions are upper
+  bounds" (vague) to the capability-envelope vs operational-
+  utilisation framing, pointing at `range_at_utilisation` as the ops
+  layer.
+
+**Impact on Phase 2.**
+
+- Week-6 LHS sweep can now sample `drive_duty_cycle` in
+  [0.02, 0.6] and see the duty-dominated regime real rovers operate
+  in -- roughly an order of magnitude more of the physically
+  meaningful design space.
+- Project paper has a clean "this tool sizes capability, not ops
+  utilisation" framing that matches JPL Team-X / ESA CDF conventions
+  and heads off the "your range is 6× the real value" reviewer
+  comment.
+- Full suite: 201 tests, 1 xfail (4 new utilisation-helper tests on
+  top of Week-5.5).
+

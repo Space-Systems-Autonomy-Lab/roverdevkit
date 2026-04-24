@@ -5,6 +5,19 @@ surrogate layer is a fast approximation of this function; the tradespace
 and validation layers consume its outputs. Every ML claim in the paper is
 grounded in what this function computes.
 
+Capability envelope vs operational utilisation
+----------------------------------------------
+The outputs describe what the *hardware can deliver* if ops commands it
+to drive at the design vector's ``drive_duty_cycle`` for the whole
+mission window. Real missions typically command **below** the designed
+duty (Pragyan ~0.02, Yutu-2 ~0.015, Sojourner ~0.01) for reasons the
+evaluator does not model: uplink / command cycles, science campaigns,
+thermal hot-soak pauses, fault response. Utilisation-adjusted range at
+a lower commanded duty ``u`` is a post-hoc rescaling --
+``range_u = range_km * u / drive_duty_cycle`` for ``u <= drive_duty_cycle``
+-- not an evaluator input. This is the same engineering-vs-operations
+distinction that JPL Team X and ESA CDF studies use.
+
 Pipeline
 --------
 1. Mass model  -> total vehicle mass + per-subsystem breakdown
@@ -265,3 +278,55 @@ def evaluate(
         thermal_survival=thermal_ok,
         motor_torque_ok=motor_torque_ok,
     )
+
+
+def range_at_utilisation(
+    metrics: MissionMetrics,
+    design: DesignVector,
+    operational_duty_cycle: float,
+) -> float:
+    """Rescale capability-envelope range to an operational duty cycle.
+
+    ``MissionMetrics.range_km`` is the capability envelope at the design
+    vector's ``drive_duty_cycle``. Real missions typically command a
+    lower duty than the hardware can sustain (Pragyan ~0.02, Yutu-2
+    ~0.015, Sojourner ~0.01). This helper answers the ops-layer query
+    "how far does this rover go if operators only command it to drive
+    fraction ``u`` of the time?" via linear rescaling of forward progress.
+
+    The rescaling is exact when the rover's power balance at the lower
+    duty remains in the same regime (battery never floors, thermal never
+    flips). Outside that regime (much lower duty moves the rover into a
+    steady-state battery-positive mode it was not in at design duty) the
+    rescaling is a strict upper bound, because less driving means more
+    solar charging time and a richer energy balance -- i.e. range can
+    only go *up* relative to the linear projection, never down.
+
+    Parameters
+    ----------
+    metrics
+        Output of :func:`evaluate`.
+    design
+        The design vector that produced ``metrics``.
+    operational_duty_cycle
+        Desired operational utilisation ``u``. Must be in
+        ``[0, design.drive_duty_cycle]``; passing a value above the
+        designed duty is a coding error (the hardware was not sized for
+        it) and raises ``ValueError``.
+
+    Returns
+    -------
+    float
+        Predicted range in km at the operational duty cycle.
+    """
+    if operational_duty_cycle < 0.0:
+        raise ValueError(f"operational_duty_cycle must be >= 0 (got {operational_duty_cycle})")
+    if operational_duty_cycle > design.drive_duty_cycle + 1e-9:
+        raise ValueError(
+            f"operational_duty_cycle {operational_duty_cycle} exceeds "
+            f"designed duty {design.drive_duty_cycle}; the hardware "
+            "was not sized to sustain that utilisation."
+        )
+    if design.drive_duty_cycle <= 1e-9:
+        return 0.0
+    return metrics.range_km * (operational_duty_cycle / design.drive_duty_cycle)
