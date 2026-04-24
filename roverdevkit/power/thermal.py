@@ -7,10 +7,7 @@ power, surface absorptivity / emissivity, total radiating area,
 effective radiative-sink temperatures, and an assumed solar
 projected-area fraction.
 
-Thermal architecture is deliberately *not* a continuous design variable
-in v1 -- adding it is a week-12 stretch goal (project_plan.md §3.1). For
-Week 4 we only care whether a given design survives; the actual
-temperatures come out too, for notebook diagnostics.
+
 
 Model
 -----
@@ -164,10 +161,50 @@ def _equilibrium_temperature_k(
     area_rad_m2: float,
     emissivity: float,
 ) -> float:
-    """Single-node steady-state temperature from an absorbed heat load."""
+    """Single-node steady-state temperature from an absorbed heat load.
+
+    Derivation (Gilmore 2002 Ch. 1; Incropera & DeWitt *Fundamentals of
+    Heat and Mass Transfer*, 7th ed., §1.2.3). For a one-node
+    (isothermal) enclosure in steady state, conservation of energy is
+
+    .. math::
+
+        Q_{\\text{in}} \\;=\\; Q_{\\text{out}}(T),
+
+    where the radiative loss against a grey-body sink at ``T_sink`` is
+    the Stefan-Boltzmann law
+
+    .. math::
+
+        Q_{\\text{out}}(T) \\;=\\; \\varepsilon\\,\\sigma\\,A_{\\text{rad}}\\,
+                                   (T^4 - T_{\\text{sink}}^4).
+
+    Solving for the equilibrium temperature T gives the closed form
+
+    .. math::
+
+        T \\;=\\; \\left(T_{\\text{sink}}^4
+                       + \\frac{Q_{\\text{in}}}
+                               {\\varepsilon\\,\\sigma\\,A_{\\text{rad}}}
+                  \\right)^{1/4}.
+
+    No iteration required -- this is why the hot- and cold-case checks
+    stay O(1) in the mission evaluator's inner loop.
+
+    Symbol key (math -> Python parameter):
+
+        T              equilibrium node temperature, K            (return value)
+        T_sink         effective radiative-sink temperature, K    (``t_sink_k``)
+        Q_in           total absorbed heat load, W                (``q_in_w``)
+        A_rad          total radiating surface area, m^2          (``area_rad_m2``)
+        eps (epsilon)  IR emissivity in [0, 1]                    (``emissivity``)
+        sigma          Stefan-Boltzmann constant, W/(m^2 * K^4)   (``STEFAN_BOLTZMANN_W_PER_M2_K4``)
+    """
     if q_in_w < 0.0:
         # No physical scenario in this module, but guard anyway.
         q_in_w = 0.0
+    # Q_in / (eps * sigma * A_rad) has units K^4; adding T_sink^4 and
+    # taking the fourth root recovers the equilibrium temperature in K.
     q_ratio = q_in_w / (emissivity * STEFAN_BOLTZMANN_W_PER_M2_K4 * area_rad_m2)
     return (t_sink_k**4 + q_ratio) ** 0.25
 
@@ -177,13 +214,56 @@ def _peak_sun_absorbed_w(
     latitude_deg: float,
     solar_constant_w_per_m2: float,
 ) -> float:
-    """Absorbed solar at the scenario's peak sun elevation.
+    """Absorbed solar power on the enclosure at peak sun.
 
-    Peak elevation on a diurnal lunar day at latitude ``phi`` with zero
-    declination is ``90 - |phi|``, so the horizontal-plane insolation
-    factor is ``cos(phi)``. Projected area is a fraction of the total
-    surface area (configurable, default 0.25).
+    Derivation. On a diurnal lunar day at selenographic latitude
+    ``phi``, with zero declination (lunar obliquity ~1.5 deg is
+    absorbed into model-form uncertainty here), the sun reaches a
+    maximum elevation
+
+    .. math::
+
+        \\text{el}_{\\max} \\;=\\; 90^\\circ - |\\phi|.
+
+    The irradiance that reaches a horizontal surface at the top of the
+    enclosure is the standard cos-of-incidence projection (Patel
+    *Spacecraft Power Systems* eq. 5.6; Duffie & Beckman *Solar
+    Engineering of Thermal Processes*, 4th ed., Ch. 1):
+
+    .. math::
+
+        S_{\\text{horiz}} \\;=\\; S\\,\\sin(\\text{el}_{\\max})
+                             \\;=\\; S\\,\\cos(\\phi).
+
+    Only a fraction ``f`` of the total enclosure area faces the sun at
+    any instant (one face of a roughly-isotropic box), so the
+    effective sunlit area is ``A_sun = f * A_total`` and the
+    absorbed-power balance becomes
+
+    .. math::
+
+        Q_{\\odot} \\;=\\; \\alpha\\,S_{\\text{horiz}}\\,A_{\\text{sun}}
+                   \\;=\\; \\alpha\\,S\\,\\cos(\\phi)\\,f\\,A_{\\text{total}}.
+
+    ``|phi|`` is used because the formula is symmetric between the
+    northern and southern lunar hemispheres; at the poles (|phi| = 90)
+    the cosine factor vanishes and peak insolation is zero, which
+    matches the skimming-sun-at-the-horizon behaviour at polar
+    latitudes.
+
+    Symbol key (math -> Python parameter / attribute):
+
+        Q_sun          absorbed solar power, W                    (return value)
+        alpha          solar absorptivity in [0, 1]               (``architecture.absorptivity``)
+        S              top-of-atmosphere solar irradiance, W/m^2  (``solar_constant_w_per_m2``)
+        phi            selenographic latitude, deg                (``latitude_deg``)
+        el_max         peak sun elevation, deg                    (derived, = 90 - |phi|)
+        f              sunlit-area fraction in (0, 1]             (``architecture.solar_projected_area_fraction``)
+        A_total        total enclosure surface area, m^2          (``architecture.surface_area_m2``)
+        A_sun          instantaneous sunlit area, m^2             (derived, = f * A_total)
     """
+    # cos(|phi|) = sin(90 - |phi|) = sin(el_max): the horizontal-plane
+    # insolation factor.
     elevation_factor = math.cos(math.radians(abs(latitude_deg)))
     sunlit_area_m2 = architecture.surface_area_m2 * architecture.solar_projected_area_fraction
     return architecture.absorptivity * solar_constant_w_per_m2 * elevation_factor * sunlit_area_m2
