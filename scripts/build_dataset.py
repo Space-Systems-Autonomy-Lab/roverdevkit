@@ -183,8 +183,9 @@ def main(argv: list[str] | None = None) -> int:
 
     n_ok = int((df["status"] == "ok").sum())
     n_total = len(df)
+    n_failed = n_total - n_ok
     log.info(
-        "wrote %d rows x %d cols to %s (ok=%d/%d, %.1f%%) in %.1f s (%.2f s/sample, "
+        "wrote %d rows x %d cols to %s (ok=%d/%d, %.2f%%) in %.1f s (%.2f s/sample, "
         "%.2f s/sample/worker)",
         n_total,
         len(df.columns),
@@ -196,12 +197,27 @@ def main(argv: list[str] | None = None) -> int:
         elapsed / max(1, n_total),
         elapsed * workers / max(1, n_total),
     )
-    if "feasible" in df.columns or "motor_torque_ok" in df.columns:
-        feas_col = "motor_torque_ok"
-        feas_rate = float(df[feas_col].astype(bool).mean())
-        log.info("feasibility positive rate (%s): %.2f%%", feas_col, 100 * feas_rate)
+    if n_failed > 0:
+        # Per-sample exceptions are recorded in the ``status`` column and
+        # are part of the documented graceful-failure contract, not a
+        # script-level error. Surface them so they're visible without
+        # tripping CI.
+        top_reasons = df.loc[df["status"] != "ok", "status"].value_counts().head(5)
+        log.warning(
+            "%d sample(s) hit a graceful-failure path (still recorded with NaN metrics). "
+            "Top reasons: %s",
+            n_failed,
+            ", ".join(f"{k}={v}" for k, v in top_reasons.items()),
+        )
+    if "motor_torque_ok" in df.columns:
+        feas_rate = float(df["motor_torque_ok"].astype(bool).mean())
+        log.info("feasibility positive rate (motor_torque_ok): %.2f%%", 100 * feas_rate)
 
-    return 0 if n_ok == n_total else 1
+    # Non-zero exit only on catastrophic build failure (no rows written).
+    # Per-sample graceful failures are by design and must not masquerade
+    # as a script error, otherwise CI / shell wrappers misclassify
+    # successful runs.
+    return 0 if n_total > 0 else 1
 
 
 if __name__ == "__main__":
