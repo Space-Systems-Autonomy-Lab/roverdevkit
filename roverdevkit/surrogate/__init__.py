@@ -25,6 +25,17 @@ Target accuracy (project_plan.md §7 Layer 1):
     R² > 0.95 for range_km and energy_margin_pct; R² > 0.85 for slope.
 """
 
+from roverdevkit.surrogate.baselines import (
+    ACCEPTANCE_GATES,
+    CLASSIFIER_ALGORITHMS,
+    JOINT_MLP_NAME,
+    REGRESSION_ALGORITHMS,
+    FittedBaselines,
+    acceptance_gate,
+    evaluate_baselines,
+    fit_baselines,
+    predict_for_registry_rovers,
+)
 from roverdevkit.surrogate.dataset import (
     DatasetMetadata,
     build_and_write,
@@ -41,13 +52,22 @@ from roverdevkit.surrogate.sampling import (
 )
 
 __all__ = [
+    "ACCEPTANCE_GATES",
+    "CLASSIFIER_ALGORITHMS",
     "FAMILIES",
     "DatasetMetadata",
+    "FittedBaselines",
+    "JOINT_MLP_NAME",
     "LHSSample",
+    "REGRESSION_ALGORITHMS",
     "ScenarioFamily",
+    "acceptance_gate",
     "build_and_write",
     "build_dataset",
+    "evaluate_baselines",
+    "fit_baselines",
     "generate_samples",
+    "predict_for_registry_rovers",
     "read_parquet",
     "read_parquet_metadata",
     "write_parquet",

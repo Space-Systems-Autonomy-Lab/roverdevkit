@@ -1,0 +1,16 @@
+algorithm,target,fit_seconds
+logreg,motor_torque_ok,0.04808250000496628
+mlp_joint,joint,7.509786417002033
+random_forest,energy_margin_raw_pct,4.5473342499972205
+random_forest,range_km,4.206353542002034
+random_forest,slope_capability_deg,4.17502854099439
+random_forest,total_mass_kg,4.169293124999967
+ridge,energy_margin_raw_pct,0.025735958995937835
+ridge,range_km,0.028357208000670653
+ridge,slope_capability_deg,0.024907791994337458
+ridge,total_mass_kg,0.02426645899686264
+xgboost,energy_margin_raw_pct,1.146198500005994
+xgboost,motor_torque_ok,1.3475377499999013
+xgboost,range_km,1.1192787920008413
+xgboost,slope_capability_deg,1.1340203340005246
+xgboost,total_mass_kg,1.1103291670006001

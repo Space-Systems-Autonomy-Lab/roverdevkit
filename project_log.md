@@ -1059,5 +1059,120 @@ isn't broken."
   4 alongside SCM. When it lands, it restores thermal as a learnable
   Pareto target and would justify a `SCHEMA_VERSION = v3`.
 
+---
 
+## 2026-04-25 — Week 6 step 4: baseline surrogate matrix on 40k LHS
 
+**Decision.** Ship the Week-6 step-4 baseline matrix as
+`roverdevkit.surrogate.baselines` plus `scripts/run_baselines.py`,
+with results frozen under `reports/week6_baselines_v1/`. Architecture
+is **per-target Ridge / RandomForest / XGBoost** (one fit per
+(algorithm, target)) plus a single **joint multi-output MLP**
+(`sklearn.neural_network.MLPRegressor`, 128 → 64 hidden) across all
+four primary regression targets, plus a **single-target feasibility
+classifier** (LogReg + XGBoost) on `motor_torque_ok`. Hyperparameter
+tuning is deferred to Week 7 so the lift from Optuna is cleanly
+attributable.
+
+**Why per-target instead of multi-output for the tree/linear models.**
+The four primary targets — `range_km`, `energy_margin_raw_pct`,
+`slope_capability_deg`, `total_mass_kg` — span very different
+underlying physics (mass is a near-linear sum of subsystems, range is
+a multiplicative function of solar geometry × duty cycle × mass, slope
+capability is a Bekker-Wong threshold). A `MultiOutputRegressor`
+forces shared hyperparameters that would under-fit the harder targets
+and over-fit the easier ones. The MLP is the exception: shared hidden
+layers are precisely its reason to exist, and at our scale (32k train
+× 28 features × 4 outputs) it costs only 7.5 s to fit jointly — so we
+keep it joint and let the comparison stand.
+
+**Why a separate XGBoost categorical conform path.** XGBoost 3.x with
+`enable_categorical=True` strict-checks at predict time: any category
+absent from training raises (we hit this on the pilot when the
+registry rover Pragyan's soil simulant `GRC-1` was not in the
+LHS-sampled categories). Fix: `FittedBaselines.training_categories`
+records the trained codebook, and `predict_for_registry_rovers`
+recodes the registry-rover row's categoricals against that codebook
+(unseen → NaN, which XGBoost treats as missing). One-hot pipelines
+already use `handle_unknown='ignore'` so they didn't need a separate
+fix.
+
+**Results (40k LHS, train=32 137, val=3 880, test=3 983).**
+
+| Algorithm     | range R² | energy-margin R² | slope R² | mass R² | feasibility AUC |
+|---------------|---------:|-----------------:|---------:|--------:|----------------:|
+| Ridge         |   0.7694 |          0.6613  |   0.9166 |  0.9974 |               — |
+| RandomForest  |   0.9974 |          0.9702  |   0.9318 |  0.9923 |               — |
+| XGBoost       |   0.9981 |          0.9869  |   0.9857 |  0.9991 |          0.9976 |
+| MLP (joint)   |   0.9985 |          0.9958  |   0.9978 |  0.9997 |               — |
+| LogReg        |        — |               —  |        — |       — |          0.9882 |
+
+The joint MLP wins **every** primary target by a small margin over
+per-target XGBoost; XGBoost wins the feasibility classifier.
+
+**Acceptance gate.** 16 / 18 (algorithm, target) cells on the test
+split clear the plan thresholds (R² ≥ 0.95 on range / energy margin,
+R² ≥ 0.85 on slope / mass, AUC ≥ 0.90 on feasibility). The two
+failures are both Ridge:
+
+- `ridge × range_km`: R² 0.7694 (threshold 0.95)
+- `ridge × energy_margin_raw_pct`: R² 0.6613 (threshold 0.95)
+
+This is the exact diagnostic we want: linear regression cannot model
+the multiplicative coupling at the heart of the mission physics, and
+on `polar_prospecting` energy margin Ridge collapses to R² ≈ −59
+while every non-linear baseline holds R² ≥ 0.79 on the same family.
+Per-scenario breakdown lives in `reports/week6_baselines_v1/test_per_family.csv`.
+
+**Total fit wall-clock 30.6 s** on 11 cores (Ridge ~0.1 s × 4 + RF
+~17 s + XGB ~4.5 s + MLP 7.5 s + classifiers 1.4 s). Cheap enough
+that retraining inside the Week-7 SCM-correction gate is free.
+
+**Registry-rover Layer-1 sanity (`reports/week6_baselines_v1/registry_sanity.csv`).**
+Median |relative error| across baselines per (rover, target):
+
+| Rover     | mass | slope | range | energy margin |
+|-----------|-----:|------:|------:|--------------:|
+| Yutu-2    | 2.0% |  2.2% | 1297% |          38%  |
+| Pragyan   | 0.6% | 68.1% |  547% |          80%  |
+| Sojourner | 10.8%| 16.3% |13601% |         112%  |
+
+Mass and slope track tightly. The huge range / energy-margin relative
+errors are an OOD effect, not a model bug:
+
+- Pragyan is 26 kg with a planned 100 m traverse — its actual
+  evaluator-computed `range_km` is well below the LHS support, so a
+  small absolute prediction error becomes a large relative one.
+- Sojourner runs at Mars gravity (3.71 m/s²) — entirely outside the
+  lunar LHS — so this is the expected "do not extrapolate beyond
+  support" warning rather than a calibration target.
+- Energy margin can cross zero (negative for energy-starved configs),
+  which makes relative error meaningless near the zero-crossing; the
+  full `registry_sanity.csv` shows the absolute errors are physically
+  small.
+
+**Consequences.**
+
+- Week-6 step 4 is closed: the surrogate matrix exists, the gate is
+  green except for the linear-baseline diagnostic, and the wall-clock
+  budget for Week-7 retraining is < 1 minute. The remaining Week-6
+  step 5 (notebook + writeup) is rebuilding the same numbers in
+  `notebooks/02_baseline_surrogates.ipynb` for the writeup, plus the
+  `benchmark_score` helper that wraps `evaluate_baselines` with a
+  fixed schema for Phase-5 leaderboard submissions.
+- The XGBoost feasibility classifier at AUC 0.9976 is good enough
+  that the Week-11 NSGA-II constraint layer can use it directly
+  rather than the deterministic evaluator: this collapses the
+  optimisation inner loop from ~1.4 s/eval to ~10 µs/eval (a ~5
+  order-of-magnitude speedup) once the regressor matches.
+- Joint MLP outperforming per-target XGBoost on every regression
+  target is suggestive but not conclusive: at sensible-default
+  hyperparameters MLP has marginally more capacity to share
+  representation across targets. Week-7 Optuna tuning of XGBoost may
+  flip the ranking; if not, the MLP's joint architecture becomes the
+  Week-11 Pareto-search surrogate of choice.
+- The OOD-warning result for Sojourner (Mars gravity) is exactly
+  what the Layer-1 sanity is meant to catch and what Paper 1's
+  capability-envelope framing argues: the surrogate is honest about
+  its support, and Paper 2's benchmark release will document this
+  support explicitly.

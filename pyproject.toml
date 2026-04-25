@@ -77,6 +77,12 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "NPY"]
 ignore = ["E501"]
 
+[tool.ruff.lint.per-file-ignores]
+# Allow the conventional sklearn naming (`X_train`, `Y_pred`, `X_feas`)
+# in surrogate ML code; lowercase variants would obscure the standard
+# convention.
+"roverdevkit/surrogate/baselines.py" = ["N806"]
+
 [tool.ruff.format]
 quote-style = "double"
 
