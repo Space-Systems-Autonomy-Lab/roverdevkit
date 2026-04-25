@@ -14,11 +14,24 @@ Column schema (documented in ``data/analytical/SCHEMA.md``):
   jittered Bekker soil parameters).
 - ``range_km`` / ``energy_margin_pct`` / ``energy_margin_raw_pct`` /
   ``slope_capability_deg`` / ``total_mass_kg`` / ``peak_motor_torque_nm``
-  / ``sinkage_max_m`` / ``thermal_survival`` / ``motor_torque_ok`` —
-  :class:`MissionMetrics` targets.
+  / ``sinkage_max_m`` / ``motor_torque_ok`` — :class:`MissionMetrics`
+  targets the surrogate predicts.
 - ``stat_*`` — aggregate statistics (mean / p95 / max / final) from the
   :class:`TraverseLog` time series for the Week-7.5 SCM-correction
   gate and surrogate diagnostics.
+
+Thermal scope (v2)
+------------------
+The system-level evaluator still computes ``thermal_survival`` as a
+diagnostic but the surrogate **does not** consume or predict it.
+Rationale: the current mass model treats RHU power and MLI quality as
+free, so thermal_survival reduces to a near-trivial gate ("did you add
+an RHU?") with no design trade-off. Including it as a target would
+add a degenerate column and dilute the headline R²/AUC. The Pragyan
+vs. Yutu-2 thermal distinction is preserved in the Week-5 validation
+harness (``roverdevkit.validation.rover_registry``); a future mass-model
+upgrade that charges RHU/MLI mass will let thermal re-enter the
+surrogate as a real Pareto trade.
 
 Failure handling
 ----------------
@@ -53,9 +66,17 @@ from roverdevkit.surrogate.sampling import LHSSample
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "v1"
+SCHEMA_VERSION = "v2"
 """Bump when the column schema changes so downstream code can detect
-stale Parquet files. Written into Parquet file-level metadata."""
+stale Parquet files. Written into Parquet file-level metadata.
+
+History
+-------
+- v1 (Week 6 step 1, retired): included ``thermal_survival`` as a
+  feasibility target.
+- v2 (Week 6 step 2): drop ``thermal_survival`` from the schema; the
+  evaluator still computes it but the surrogate does not consume it.
+  See module docstring for the scoping rationale."""
 
 DEFAULT_FIDELITY = "analytical"
 
@@ -106,6 +127,8 @@ def _flatten_scenario(scenario: MissionScenario, sample: LHSSample) -> dict[str,
 
 
 def _flatten_metrics(metrics: MissionMetrics) -> dict[str, Any]:
+    # ``metrics.thermal_survival`` is intentionally not flattened into
+    # the dataset; see the module-level "Thermal scope" docstring.
     return {
         "range_km": metrics.range_km,
         "energy_margin_pct": metrics.energy_margin_pct,
@@ -114,7 +137,6 @@ def _flatten_metrics(metrics: MissionMetrics) -> dict[str, Any]:
         "total_mass_kg": metrics.total_mass_kg,
         "peak_motor_torque_nm": metrics.peak_motor_torque_nm,
         "sinkage_max_m": metrics.sinkage_max_m,
-        "thermal_survival": bool(metrics.thermal_survival),
         "motor_torque_ok": bool(metrics.motor_torque_ok),
     }
 
@@ -180,10 +202,7 @@ _NUMERIC_METRIC_COLS: tuple[str, ...] = (
     "sinkage_max_m",
 )
 
-_BOOL_METRIC_COLS: tuple[str, ...] = (
-    "thermal_survival",
-    "motor_torque_ok",
-)
+_BOOL_METRIC_COLS: tuple[str, ...] = ("motor_torque_ok",)
 
 _STAT_NUMERIC_COLS: tuple[str, ...] = (
     "stat_power_in_mean_w",

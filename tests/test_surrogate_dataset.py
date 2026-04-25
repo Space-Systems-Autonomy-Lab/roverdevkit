@@ -89,9 +89,12 @@ _EXPECTED_METRIC_COLS = {
     "total_mass_kg",
     "peak_motor_torque_nm",
     "sinkage_max_m",
-    "thermal_survival",
     "motor_torque_ok",
 }
+# thermal_survival was removed at SCHEMA_VERSION = v2; the surrogate no
+# longer consumes it (the system-level evaluator still computes it as a
+# diagnostic). See data/analytical/SCHEMA.md for the rationale.
+_THERMAL_REMOVED_COLS = {"thermal_survival"}
 
 
 def test_row_count_matches_sample_count(small_df: pd.DataFrame) -> None:
@@ -160,9 +163,17 @@ def test_metric_ranges_are_physically_plausible(small_df: pd.DataFrame) -> None:
     assert (ok["total_mass_kg"] > 0).all()
 
 
-def test_thermal_and_motor_flags_are_boolean(small_df: pd.DataFrame) -> None:
-    assert small_df["thermal_survival"].dtype == bool
+def test_motor_torque_ok_is_boolean(small_df: pd.DataFrame) -> None:
     assert small_df["motor_torque_ok"].dtype == bool
+
+
+def test_thermal_survival_not_in_schema(small_df: pd.DataFrame) -> None:
+    """v2 schema removes thermal_survival from the dataset (see SCHEMA.md)."""
+    for col in _THERMAL_REMOVED_COLS:
+        assert col not in small_df.columns, (
+            f"{col} should not be in the v2 schema; the surrogate does not "
+            "predict thermal until the mass model charges RHU/MLI mass."
+        )
 
 
 def test_stat_columns_are_not_all_nan_on_ok_rows(small_df: pd.DataFrame) -> None:
@@ -242,7 +253,7 @@ def test_evaluator_failure_is_recorded_not_raised(monkeypatch: pytest.MonkeyPatc
     assert (df["status"] == "RuntimeError").all()
     assert df["range_km"].isna().all()
     assert df["energy_margin_pct"].isna().all()
-    assert (df["thermal_survival"] == False).all()  # noqa: E712
+    assert (df["motor_torque_ok"] == False).all()  # noqa: E712
 
 
 # ---------------------------------------------------------------------------

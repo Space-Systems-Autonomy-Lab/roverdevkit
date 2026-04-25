@@ -930,5 +930,134 @@ pilot is reproducible from seed.
   hundred ms per worker at startup but is robust against the pydantic
   model globals that `fork` would otherwise share.
 
+---
+
+## 2026-04-24 — Week 6 step 2: pilot XGBoost + thermal scope cut
+
+**Decision.** Drop `thermal_survival` from the surrogate dataset
+schema. It stays in the system-level evaluator and the Week-5
+validation harness, but the v2 Phase-2 dataset does not include it as
+a column and the feasibility classifier targets `motor_torque_ok`
+alone.
+
+**Why.** The Week-6 step-2 pilot XGBoost fit (200 samples, 168/16/16
+train/val/test) ran end-to-end and surfaced a real model-design
+issue: every pilot row had `thermal_survival = False`. Diagnosis: the
+default `ThermalArchitecture` ships with `rhu_power_w = 0.0`, and a
+sweep across `(latitude, surface_area, avionics_power, rhu_power)`
+shows lunar-night temperatures of −50 °C to −150 °C without an RHU —
+well below the −30 °C operating floor. This is **physically correct**
+(Pragyan, no RHU, did not survive lunar night; Yutu-2 and Sojourner
+both carry RHUs). The problem is upstream: the LHS sampler holds
+RHU power at zero for every design, making thermal a single-class
+constant.
+
+The first instinct was to add `rhu_power_w` and `insulation_ua_w_per_k`
+to the LHS as new design dimensions. The right question, raised mid-
+discussion: does this add design-trade signal, or just teach the
+optimizer "always set RHU = 20 W"? Inspecting the mass model
+confirmed the latter — `parametric_mers.py` charges a flat 5%
+`thermal_fraction` of subsystems with no scaling on RHU power or MLI
+quality, and no other downstream pathway penalises RHUs (no battery
+draw — Pu-238 heat is free in the energy budget; no operating
+constraint — RHUs aren't sized by chassis volume). With zero cost,
+RHU is a free design lever. A "feasibility classifier" trained on a
+free lever learns "if `rhu_power_w >= 8 W` predict True", which is
+zero design insight. Including it as a target adds a degenerate
+column and dilutes the headline R²/AUC the paper reports.
+
+The honest scoping is therefore: keep thermal as an *evaluator-level
+diagnostic* (so the system-level model still distinguishes Pragyan
+from Yutu-2 and the Week-5 validation harness still exercises it),
+remove it from the *surrogate's input/output schema* (so v2 doesn't
+contain a degenerate column), and demote it from the feasibility
+classifier (so `motor_torque_ok` carries the binary signal alone —
+this is a real Bekker-Wong outcome that depends jointly on grouser
+geometry, soil shear, mass, and slope, with 64% positive class on the
+pilot, well-balanced and learnable).
+
+This is *narrower* than the project plan's original Phase-2 scope
+("thermal_survival as a feasibility constraint", §6, §7 L1) but
+*more honest*: we're not claiming thermal is a learnable design trade
+when our physics treats it as free. A future mass-model upgrade that
+charges RHU specific mass (~50 g/W for Pu-238 + ITAR shielding) and
+MLI mass (proportional to surface area × layer count) would restore
+thermal as a real Pareto target. That belongs alongside the SCM
+correction work in Phase 3 / 4 and is queued there.
+
+**What shipped.**
+
+- `roverdevkit/surrogate/dataset.py` — `SCHEMA_VERSION` bumped
+  `v1 → v2`. `_flatten_metrics` no longer emits `thermal_survival`;
+  `_BOOL_METRIC_COLS` reduced to `("motor_torque_ok",)`. Module
+  docstring documents the thermal-scope decision so the next reader
+  doesn't have to dig through the log.
+- `roverdevkit/surrogate/features.py` — single-target classifier:
+  `CLASSIFICATION_TARGETS = ["motor_torque_ok"]`,
+  `FEASIBILITY_COLUMN = "motor_torque_ok"` (alias to the underlying
+  column, kept as a constant so future feasibility-definition changes
+  have one canonical place to update). `add_feasibility_column`
+  helper removed (the surrogate no longer needs an AND-of-two
+  derivation). The module docstring explains why no thermal target.
+  `INPUT_COLUMNS` (25 cols: 12 design + 9 numeric scenario + 4
+  categorical scenario) is the canonical input set; `valid_rows`
+  filters to evaluator-`ok` rows with non-NaN primary targets;
+  `build_feature_matrix` returns the X frame with categorical dtypes
+  preserved for `XGBRegressor(enable_categorical=True)`.
+- `data/analytical/SCHEMA.md` — v1 / v2 history block, metric column
+  count revised 9 → 8, column-count sanity revised 65 → 64, thermal
+  scope rationale documented inline.
+- `tests/test_surrogate_dataset.py` — `_EXPECTED_METRIC_COLS` updated;
+  `test_thermal_and_motor_flags_are_boolean` split into two: one
+  asserting `motor_torque_ok` dtype, one asserting `thermal_survival`
+  is absent from the v2 schema (with a docstring pointing back to
+  SCHEMA.md). Failure-handling test now asserts `motor_torque_ok =
+  False` on injected exceptions.
+- `project_plan.md` — updated the surrogate target list (the ASCII
+  pipeline diagram), the §6 feasibility paragraph (single-target
+  classifier, thermal-as-diagnostic), and noted v2 schema. Existing
+  references to thermal in the *evaluator* (lumped-parameter survival
+  check, mass model thermal fraction, registry-rover thermal
+  validation) are unchanged because that work isn't being cut.
+
+**Pilot XGBoost results (200 samples, seed=42).** Plumbing works
+end-to-end. Numbers are noisy at this scale; the take-away is "no
+obvious bugs", not "these are publishable":
+
+| Target                  | val R² | test R² | val RMSE   |
+|-------------------------|-------:|--------:|-----------:|
+| `total_mass_kg`         |   0.84 |    0.97 |    4.20 kg |
+| `slope_capability_deg`  |   0.52 |    0.58 |    3.86 °  |
+| `energy_margin_raw_pct` |   0.77 |    0.48 |  127.22 %  |
+| `range_km`              |   0.41 |   −0.41 |   10.99 km |
+
+`total_mass_kg` is strong because mass is a near-pure function of
+design with no physics-noise from the traverse. The negative test
+R² for `range_km` at n=16 is consistent with sampling variance — the
+test split happens to land on a few outlier scenarios — and is the
+exact reason this step exists (catch a *systematic* failure cheaply
+before paying for 40k samples). Per-scenario val R² for range_km
+ranges +0.15 (crater_rim) to −0.24 (equatorial_mare), again all
+single-digit n; not interpretable as anything beyond "the model
+isn't broken."
+
+**Consequences.**
+
+- Step 3 (full 40k LHS run) is unblocked. The dataset format is now
+  v2-frozen; no schema changes expected before the SCM correction
+  composes a new fidelity tag in Week 7.
+- The feasibility classifier has a single learnable target with a
+  ~64% positive class on the pilot. After step 3 (full 40k run) it
+  should hit AUC ≥ 0.85 on its own — a clean number to put in the
+  paper.
+- The Pragyan-vs-Yutu-2 thermal-survival distinction stays
+  testifiable via the Week-5 validation harness (`rover_registry.py`,
+  `tests/test_rover_comparison.py::test_thermal_survival_matches_published`).
+  This is the rhetorical use of thermal we keep — the surrogate's
+  scope just doesn't include it.
+- A future "RHU/MLI mass-model upgrade" task is queued for Phase 3 /
+  4 alongside SCM. When it lands, it restores thermal as a learnable
+  Pareto target and would justify a `SCHEMA_VERSION = v3`.
+
 
 

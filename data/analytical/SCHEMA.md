@@ -6,7 +6,9 @@ Each row is **one** `(design, scenario, soil)` triple evaluated by
 `roverdevkit.mission.evaluator.evaluate_verbose`, flattened into a
 single Parquet row.
 
-- **Schema version:** `v1` (see `dataset.SCHEMA_VERSION`).
+- **Schema version:** `v2` (see `dataset.SCHEMA_VERSION`).
+  - **v2 (current):** removed `thermal_survival` from the metric column set. The system-level evaluator still computes it as a diagnostic but the surrogate does not consume or predict it. Rationale: the current mass model treats RHU power and MLI quality as free, so `thermal_survival` reduces to a near-trivial gate ("did you add an RHU?") with no real design trade-off. The Pragyan/Yutu-2 thermal distinction stays in the Week-5 validation harness. A future mass-model upgrade that charges RHU/MLI mass would let thermal re-enter the schema as a real Pareto target (planned for the SCM-correction work in Phase 3).
+  - **v1 (retired):** included `thermal_survival` as a feasibility flag.
 - **Fidelity level (this file):** `analytical` — Bekker-Wong terramechanics
   path; no SCM correction applied. The Week-7.5 gate (project_plan.md
   §6) decides whether a composed `analytical + correction` surrogate is
@@ -90,11 +92,13 @@ family. The remaining columns are jittered per sample.
 | `scenario_soil_friction_angle_deg` | float64 | Internal friction angle, [30, 50]°. |
 | `scenario_soil_shear_modulus_k_m` | float64 | Janosi-Hanamoto K, [0.010, 0.025] m. |
 
-### Mission-metric targets (9 columns)
+### Mission-metric targets (8 columns)
 
 Mirror `MissionMetrics` fields. `range_km` and `energy_margin_raw_pct`
-are the primary regression targets (no saturation); `*_pct` and flag
-columns are secondary reporting/classification targets.
+are the primary regression targets (no saturation); `*_pct` and the
+boolean flag are secondary reporting/classification targets.
+`thermal_survival` is **not** in this group (see schema-version note
+above).
 
 | Column | dtype | Notes |
 | --- | --- | --- |
@@ -105,8 +109,7 @@ columns are secondary reporting/classification targets.
 | `total_mass_kg` | float64 | Mass-model output. |
 | `peak_motor_torque_nm` | float64 | Observed peak wheel torque during traverse. |
 | `sinkage_max_m` | float64 | Observed peak sinkage during traverse. |
-| `thermal_survival` | bool | End-of-mission thermal flag. |
-| `motor_torque_ok` | bool | Peak torque ≤ motor sizing ceiling *and* rover did not stall. |
+| `motor_torque_ok` | bool | Peak torque ≤ motor sizing ceiling *and* rover did not stall. Single feasibility classifier target. |
 
 ### Traverse-log aggregate statistics (≥24 columns)
 
@@ -141,7 +144,8 @@ Categorical:
 
 ## Column count sanity
 
-Metadata (5) + design (12) + scenario (15) + metrics (9) + stats (≥24)
-= ≥65 columns. The Week-6 step-1 pilot produces exactly 65 columns
-(`SCHEMA_VERSION = v1`); future versions appending new columns *must*
-bump `SCHEMA_VERSION` so downstream code can detect a mismatch.
+Metadata (5) + design (12) + scenario (15) + metrics (8) + stats (≥24)
+= ≥64 columns at `SCHEMA_VERSION = v2`. v1 had 65 (one more, the
+removed `thermal_survival`). Future versions appending or removing
+columns *must* bump `SCHEMA_VERSION` so downstream code can detect a
+mismatch.

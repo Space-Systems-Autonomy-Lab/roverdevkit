@@ -61,7 +61,7 @@
 │                                                                 │
 │  Primary:   range_km, energy_margin_pct, slope_capability_deg  │
 │  Secondary: total_mass_kg, peak_motor_torque, sinkage_max      │
-│  Constraint: thermal_survival (binary), motor_torque_ok        │
+│  Constraint: motor_torque_ok (binary)                          │
 └────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -206,7 +206,7 @@ The original plan assumed ~50 ms per evaluation giving "50,000 LHS samples in an
 - **Dataset size.** Start with a **pilot run of 2k samples** (~5 min with 8 workers) to verify the pipeline and catch schema / NaN / multiprocessing bugs cheaply. Full run targets **10k per scenario × 4 scenarios = 40k rows** (~2 h with 8 workers). Scale to 20k/scenario only if the pilot surrogate misses the R² targets on range or energy margin.
 - **Dataset schema (extensibility for W7/W8).** Each row stores: design vector (12 fields), scenario parameters as continuous features (not one-hot of simulant names), raw `MissionMetrics`, and a `fidelity: "analytical"` tag so SCM-corrected runs can be appended later if needed. Also store aggregate sub-model statistics (peak / mean / P95 of wheel drawbar pull, sinkage, motor torque, solar power, battery SOC). These stats serve two purposes downstream: (a) they're the most informative features for the Week-7.5 correction surrogate, which learns `Δmission_metric = f(design, scenario, wheel-regime)`; (b) they enable sub-model-level SHAP and failure-mode diagnostics in the Week-12 design-rule analysis. Written as Parquet to `data/analytical/lhs_v1.parquet`.
 - **Regression targets.** `range_km` (capability at designed duty, per Week 5.6), `energy_margin_raw_pct` (unclipped, per Week 5.5 — the plan originally specified the clipped `energy_margin_pct` but that saturates across much of the design space), `slope_capability_deg`, `total_mass_kg`. The clipped reporting metric is derived post-hoc from the raw prediction.
-- **Feasibility: two-stage classifier + regressor.** Booleans `thermal_survival` and `motor_torque_ok` are trained as a feasibility classifier (XGBoost / logistic), with the regressor trained on the feasible subset. This gives honest feasibility probabilities for the Week-11 NSGA-II constraint layer and keeps the regressor from wasting capacity on the `range_km = 0` failure mode.
+- **Feasibility: single-target classifier + regressor (Week-6 step-2 scope cut).** The boolean `motor_torque_ok` is trained as the feasibility classifier (XGBoost / logistic), with the regressor trained on the feasible subset. This gives honest feasibility probabilities for the Week-11 NSGA-II constraint layer and keeps the regressor from wasting capacity on the `range_km = 0` failure mode. **Thermal scope:** `thermal_survival` is no longer a surrogate target. The current mass model treats RHU power and MLI quality as free design choices, so `thermal_survival` reduces to a near-trivial gate ("did you add an RHU?") with no design trade-off. The system-level evaluator still computes it as a diagnostic (preserved for Pragyan/Yutu-2 distinction in the Week-5 validation harness), and a future mass-model upgrade that charges RHU/MLI mass will let thermal re-enter the surrogate as a real Pareto target. See `data/analytical/SCHEMA.md` v1→v2 notes.
 - **Baselines.** Ridge linear, random forest, XGBoost, small MLP. Multi-output across the four regression targets. 80/10/10 train/val/test split stratified by scenario.
 - **Evaluation.** Report R² / RMSE / MAPE per target, broken out both aggregate and per-scenario (catches cases where the model is great on equatorial and terrible on polar). AUC / F1 for the feasibility classifier. Plus a **registry-rover sanity check**: predict metrics for Pragyan / Yutu-2 / Sojourner against their registry design vectors and compare surrogate predictions to the evaluator's own predictions (Layer-1, not Layer-4). Guards against the surrogate doing well on IID LHS but being wrong exactly where we validate.
 - **Target accuracy (unchanged from original plan).** R² > 0.95 for range and raw energy margin; R² > 0.85 for slope capability; AUC > 0.90 for feasibility.
@@ -472,7 +472,7 @@ Two papers come out of this codebase: one during the semester (methodology-forwa
 **Target venues:** *Journal of Field Robotics* (primary), *International Journal of Robotics Research*, or *Journal of Spacecraft and Rockets*. IEEE Aerospace or AIAA SciTech as MVP venues if the full claim has to be scoped down.
 
 ### Title
-Multi-Fidelity Surrogate Modeling for Capability-Envelope Tradespace Exploration: Application to Lunar Micro-Rovers
+Capability-Envelope Tradespace Exploration for Lunar Micro-Rovers using a Multi-Fidelity Surrogate with Layered Validation
 
 ### Abstract (~250 words)
 - **Problem.** Coupled wheel-power-mass trades for lunar micro-rovers are high-dimensional and currently done with proprietary tools (JPL Team X, ESA CDF) or static spreadsheet models. Existing open-source work is either component-level (single wheel) or conflates hardware capability with operational utilisation, producing range predictions that disagree with flown rovers by 5-10×.
