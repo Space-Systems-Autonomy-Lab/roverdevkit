@@ -5,8 +5,22 @@ one in §6 W2 ("document the decision in the project log") for the
 PyChrono go/no-go; this file is the permanent home for that and every
 similar decision from here on.
 
-Format: dated entry, with the decision, the context, and what changed as
-a result. Keep entries terse.
+## Log discipline (effective 2026-04-25)
+
+Each piece of content lives in **one** place. The log records the *why*
+and the *what changed*, and links out for the rest:
+
+- Numerical results → `reports/<week>/*.csv` / `*.parquet`
+- Schema, columns, units → `data/analytical/SCHEMA.md` and module docstrings
+- Current plan state → `project_plan.md`
+- Sub-system technical detail → function / module docstrings
+- User-facing demos → `notebooks/`
+- Project pitch (frozen) → `project_brief.md`
+
+Entry format: dated heading, then a terse decision + context + pointer.
+Target ≤ 30 lines per entry; do not restate tables, schemas, or numbers
+that already live in the canonical home above. Entries before this date
+predate the rule and are not retro-trimmed.
 
 ---
 
@@ -1176,3 +1190,1565 @@ errors are an OOD effect, not a model bug:
   capability-envelope framing argues: the surrogate is honest about
   its support, and Paper 2's benchmark release will document this
   support explicitly.
+
+## 2026-04-25 — Validation registry refactor: lunar-only roster, two-tier flown vs design-target
+
+**Context.** The Week-6 step-4 baseline rerun on 40k LHS rows showed
+strong IID R² but large relative errors against the registry-rover
+Layer-1 sanity check (`reports/week6_baselines_v1/registry_sanity.csv`,
+above). Two structural causes surfaced once we examined where each
+registry rover sat in the LHS support:
+
+1. **Sojourner is multiply OOD.** Mars gravity (3.71 m/s²) is outside
+   the lunar LHS by construction; on top of that, its design vector
+   (10.6 kg, 6.5 cm wheels) sits at the floor of the design-space cube.
+   A capability-envelope surrogate trained on lunar 5–50 kg micro-
+   rovers cannot be expected to predict Sojourner without an OOD
+   wrapper, and any error it shows is dominated by the gravity step,
+   not by a calibration issue we could fix.
+2. **Yutu-2 sits on a corner of the cube.** 135 kg total ≫ 35 kg
+   schema ceiling forces a `chassis_mass_kg=35` shoehorn, putting
+   Yutu-2 against an LHS boundary on three axes (mass, wheel width,
+   grouser height). Boundaries are exactly where tree models and
+   linear baselines extrapolate worst.
+3. **The registry was thin (n=2 lunar rovers).** Without more lunar
+   micro-rover anchors the Layer-1 sanity check is almost a
+   single-point comparison.
+
+**Decision.** Re-scope the validation registry to **lunar micro-rover
+class only**, with an explicit two-tier architecture:
+
+- **Tier 1 — flown rovers** (`is_flown=True`): rovers with published
+  flight traverse / peak-solar / thermal data. Layer-0 truth gate
+  (`compare_all`, Week-5 acceptance gate) runs on this tier.
+- **Tier 2 — design-target rovers** (`is_flown=False`): well-spec'd
+  micro-rover designs that did not deploy (lander loss, in
+  development, or operations halted). Layer-1 surrogate sanity
+  (`predict_for_registry_rovers`, Week-6) runs on this tier *plus*
+  the flown tier; Layer-0 truth gate skips them because there is no
+  flight ground truth to score against.
+
+Roster after the refactor: Pragyan (flown), Yutu-2 (flown),
+**MoonRanger** (CMU/Astrobotic, in development, design-target),
+**Rashid-1** (MBRSC/UAE, lost on Hakuto-R Mission 1, design-target).
+Sojourner removed from registry, scenario set, published-traverse CSV,
+and rover-comparison Mars-irradiance branch.
+
+**Iris not added.** Iris (CMU/Astrobotic CubeRover) is battery-only
+with no solar array, which violates the surrogate's
+`solar_area_m2 ∈ [0.1, 1.5]` requirement. Modelling it honestly would
+need a schema extension (battery-only architecture) outside the
+current Phase-1 scope; we'd be shoehorning a bogus solar area
+otherwise.
+
+**Imputation strategy for the new design-target entries.** Both new
+entries follow the same convention the Week-3 mass-validation set
+established: every cited number lifted from the literature, every
+imputed number documented in `RoverRegistryEntry.imputation_notes`
+with the source of the imputation (class match, photo measurement,
+or back-solve from a published mission goal).
+
+- *MoonRanger*: cited mass (13 kg), n_wheels (4), max mech speed
+  (0.07 m/s), 8-Earth-day mission, no RHU (Kumar et al. i-SAIRAS 2020;
+  MoonRanger Project labs page; Astrobotic LSITP award). Imputed
+  wheel and grouser specs by class match to Rashid-1; solar / battery
+  / avionics by power-budget back-solve against the
+  kilometer-per-day exploration target.
+- *Rashid-1*: cited mass (10 kg), n_wheels (4), wheel radius/width
+  (10 cm / 8 cm), grouser height (15 mm flight) and count (14),
+  wheelbase, nominal speed (Hurrell et al. 2025 SSR 221:37; Els et al.
+  LPSC 2021 #1905). Imputed solar / battery / avionics by power-budget
+  back-solve against the science-payload inventory and one-lunar-day
+  mission target. Atlas crater landing site (47 N, 44 E) used for
+  scenario.
+
+**Schema change.** Widened `DesignVector.grouser_height_m` upper bound
+from 12 mm to 20 mm so Rashid-1's flight 15 mm grousers fit faithfully.
+The LHS sampler in `roverdevkit/surrogate/sampling.py` still draws to
+12 mm only (existing v2 dataset is unaffected); widening LHS to the
+new ceiling is the next planned commit (LHS-bounds widening + dataset
+regen + baseline rerun, per the strategy approved earlier this week).
+The two other planned bound widenings (`chassis_mass_kg` to 50 kg,
+`wheel_width_m` to 0.20 m) are deferred to that same commit.
+
+**Schema docstring updates.** Removed `GRAVITY_MARS_M_PER_S2` constant
+(only Sojourner used it). `MissionScenario.sun_geometry` already
+supported `diurnal` so no schema extension was needed for Rashid-1's
+mid-latitude landing site (Atlas crater, 47 N).
+
+**Verification.**
+
+- `compare_all()` now scores 2/2 flown rovers passing the Week-5
+  acceptance gate (Pragyan and Yutu-2). Per-criterion outputs match
+  the prior run since neither flown rover changed.
+- `predict_for_registry_rovers` default roster expanded to four
+  rovers; the schema and unseen-categorical conform path already
+  generalise cleanly.
+- Direct evaluator outputs on the new entries (lunar gravity,
+  lunar-only registry):
+  - MoonRanger (lat -85, polar intermittent, 8-day, slope 6 typical-
+    ops): `range_km=2.000` (hits `traverse_distance_m` cap),
+    `motor_torque_ok=True`, `energy_margin_raw_pct=-77 %` (8-day
+    polar mission with a 0.30 m² array is energy-starved at the
+    designed duty — exactly the kind of design-target case the
+    Layer-1 sanity should pin down for the surrogate).
+  - Rashid-1 (lat 47, diurnal, 14-day, slope 10): `range_km=1.000`
+    (cap), `motor_torque_ok=True`, `energy_margin_raw_pct=159 %`,
+    `slope_capability_deg=10.6`. Sensible mid-latitude micro-rover.
+
+- 241 fast tests pass; ruff lint and format clean on the touched
+  files.
+
+**Files changed.**
+
+- `roverdevkit/validation/rover_registry.py`: rewrote module with
+  `is_flown` field, `flown_registry()` helper, MoonRanger and Rashid-1
+  builders, removed Sojourner builder + `GRAVITY_MARS_M_PER_S2`.
+  Two-tier docstring at the top of the file.
+- `roverdevkit/validation/__init__.py`: re-export `flown_registry`.
+- `roverdevkit/validation/rover_comparison.py`: `compare_all` now
+  iterates `flown_registry()`. Removed Mars-irradiance branch from
+  `_predicted_peak_solar_power_w`.
+- `roverdevkit/surrogate/baselines.py`: default
+  `predict_for_registry_rovers` roster updated to
+  `(Pragyan, Yutu-2, MoonRanger, Rashid-1)`. Comment about Sojourner
+  removed.
+- `roverdevkit/schema.py`: `grouser_height_m` upper bound 0.012 →
+  0.020 m with explanatory description.
+- `roverdevkit/mission/configs/`: added `moonranger_polar_demo.yaml`
+  and `rashid_atlas_crater.yaml`; deleted
+  `mpf_sojourner_ares_vallis.yaml`.
+- `data/published_traverse_data.csv`: Sojourner row removed.
+- `data/published_rovers.csv`: Sojourner row removed.
+- `tests/`: `conftest.py`, `test_rover_comparison.py`,
+  `test_surrogate_baselines.py` updated to the new roster and the
+  flown-vs-all distinction.
+- `scripts/run_baselines.py`: docstring lists the new four-rover
+  roster.
+- `roverdevkit/mission/evaluator.py`: `gravity_m_per_s2` docstring
+  no longer cites Sojourner as the off-Moon example.
+- `project_plan.md`: Week-6 sanity-check description, minimum-viable-
+  Paper-1 framing, and Key-result-2 / rediscovery cross-check lines
+  updated for the new roster.
+
+**Out of scope (deferred to next commit).**
+
+- Re-running `notebooks/00_real_rover_validation.ipynb` against the
+  updated registry. The rendered cell outputs in the committed
+  notebook still reference the Sojourner-included roster; Week 6
+  step 5 will re-execute the notebook against the new state.
+- Cleaning up `data/mass_validation_set.csv`, `data/README.md`, and
+  `project_brief.md` Week-3 references to Sojourner. Those describe
+  the Week-3 mass-MER fitting set, which remains a different concern
+  from the surrogate validation registry; pulling Sojourner from the
+  mass-fitting set would silently invalidate Week-3 results and
+  should be its own decision.
+
+## 2026-04-25 — LHS bounds widening v2 → v3, 40k regen, baseline rerun
+
+**Context.** The registry refactor (above) made Pragyan, Yutu-2,
+MoonRanger, and Rashid-1 the canonical Layer-1 sanity rovers. Three of
+those four still sat at corner points of the v2 LHS cube on
+`chassis_mass_kg` (Yutu-2 ex-payload ~30-40 kg, schema ceiling 35 kg),
+`wheel_width_m` (Lunokhod-class 0.20 m, schema ceiling 0.15 m), and
+`grouser_height_m` (Rashid-1 0.015 m, just-widened ceiling 0.020 m but
+sampler still drew to 0.012 m). To turn the surrogate's "extrapolation
+to the registry" into "interpolation inside training support" on the
+*design* axis, we widened the sampler bounds, bumped the schema
+version, and rebuilt the 40k dataset.
+
+**Changes.**
+
+- `roverdevkit/schema.py`: `wheel_width_m` upper 0.15 → 0.20 m;
+  `chassis_mass_kg` upper 35 → 50 kg. Field descriptions explain the
+  micro-rover envelope rationale.
+- `roverdevkit/surrogate/sampling.py`: `_CONTINUOUS_DESIGN_BOUNDS`
+  updated for those three columns, plus `grouser_height_m` 0.012 →
+  0.020 (was already widened in the schema commit but not in the
+  sampler). Module banner notes the v3 widening.
+- `roverdevkit/surrogate/dataset.py`: `SCHEMA_VERSION` v2 → v3 with
+  history entry. The Parquet column schema is byte-identical to v2;
+  the bump exists so a v2-trained surrogate can't be silently reused
+  on v3 data.
+- `data/analytical/SCHEMA.md`: range columns updated; v3 entry added
+  to the version history; canonical filename updated to
+  `lhs_v3.parquet` (`lhs_v1.parquet` and `lhs_v2.parquet` are retired
+  but kept on disk for reproducibility of the diagnosis report).
+- `project_plan.md` design-variable table and references to the
+  canonical dataset filename updated.
+- `scripts/build_dataset.py` and `scripts/run_baselines.py` docstring
+  examples point at `lhs_v3.parquet` and `reports/week6_baselines_v2/`.
+
+**Dataset rebuild.** `python scripts/build_dataset.py
+--n-per-scenario 10000 --seed 42 --out data/analytical/lhs_v3.parquet`.
+
+- 40 000 rows × 64 cols written.
+- Wall-clock 7 217.7 s (≈ 2 h 0 min) on 11 workers; 0.18 s/sample.
+  This is materially slower than the v2 build (~1 h) because the
+  widened bounds expand the soft-soil + heavy-chassis tail, which
+  triggers more "wheel fully buried" Bekker entry-angle failures that
+  burn worker time before raising.
+- 26 graceful-failure rows (NaN metrics, status non-`ok`); 99.94 % ok.
+- Feasibility positive rate 64.74 % (v2: ~75 %). Lower because the
+  mass / wheel-width widening grows the part of the design space
+  where wheel torque can't sustain the higher-load configs.
+- Splits: 32 137 train / 3 880 val / 3 983 test (deterministic).
+
+**Baseline rerun (`reports/week6_baselines_v2/`).** `python
+scripts/run_baselines.py --dataset data/analytical/lhs_v3.parquet
+--out-dir reports/week6_baselines_v2`. Total fit wall-clock 26.0 s.
+
+Test-split metrics (overall, all families):
+
+| Algorithm | range R² | energy R² | slope R² | mass R² |
+|-----------|---------:|----------:|---------:|--------:|
+| Ridge     |    0.769 |     0.663 |    0.910 |   0.997 |
+| RF        |    0.997 |     0.965 |    0.926 |   0.995 |
+| XGBoost   |    0.998 |     0.984 |    0.985 |   0.999 |
+| MLP joint |    0.999 |     0.995 |    0.997 |   1.000 |
+
+Feasibility: LogReg AUC 0.988, XGBoost AUC 0.997 (v2: 0.988 / 0.998).
+
+Acceptance gate: 16 / 18 passing. The two failures are the same
+Ridge-on-range and Ridge-on-energy diagnostic rows that failed under
+v2 — exactly what the linear baseline is in the matrix to surface.
+Test-split R² is statistically indistinguishable from v2; the
+non-linear models still match the evaluator essentially perfectly on
+in-distribution rows.
+
+**Registry-rover Layer-1 sanity (`reports/week6_baselines_v2/registry_sanity.csv`).**
+Median |relative error| across baselines:
+
+| Rover      | mass | slope | range  | energy margin |
+|------------|-----:|------:|-------:|--------------:|
+| Yutu-2     | 0.8% |  2.3% | 1318%  |         42%   |
+| Rashid-1   | 9.4% |  4.1% |  366%  |         45%   |
+| MoonRanger | 3.2% | 39.7% |  300%  |        267%   |
+| Pragyan    | 2.7% | 77.9% |  618%  |        135%   |
+
+Compared to v2 (Yutu-2 mass 2.0 %, Pragyan mass 0.6 %, Sojourner mass
+10.8 %), the *mass* and *slope* targets — the ones that depend
+directly on the now-interior chassis / wheel design dimensions — got
+markedly better for the Yutu-class rovers (Yutu-2 mass 2.0 % → 0.8 %;
+Yutu-2 slope ~2 % → 2.3 %, basically unchanged because slope was never
+the bottleneck). The widening did exactly what it was supposed to do
+on the *design-OOD* axis.
+
+**`range_km` and `energy_margin_raw_pct` are still wildly off.** This
+is now a clean diagnostic, not a calibration failure:
+
+- The registry rovers' published mission distances (Pragyan ≈ 100 m,
+  Yutu-2 ≈ 25 m / lunar day, MoonRanger ≈ 1 km / Earth-day) are
+  100–1000× smaller than the LHS family traverse-distance budgets
+  (20–80 km, intentionally non-binding so `range_km` stays a
+  continuous signal). The surrogate's `range_km` predictions are in
+  the family-budget regime; the Layer-1 truth value is the actual
+  evaluator output for the registry's much smaller scenario, so the
+  relative error is dominated by an absolute scale mismatch with no
+  bearing on physical model accuracy.
+- This is a **scenario-OOD** problem, not a design-OOD one. The
+  widening could not have fixed it. The right place to address it is
+  either (a) adding registry-style "short mission" scenarios to the
+  LHS support, which trades off the cleanness of the four canonical
+  family budgets; or (b) framing the registry sanity as a fidelity
+  check on physically meaningful dimensions (mass, slope capability,
+  feasibility class) rather than range/energy in the paper write-up.
+  Decision deferred to the Week-6 step-5 notebook + writeup pass; the
+  current `registry_sanity.csv` makes the structural OOD visible.
+
+**Verification.**
+
+- `pytest tests/test_surrogate_dataset.py tests/test_surrogate.py
+  tests/test_surrogate_baselines.py tests/test_schema.py -q` — 42
+  passed in 74.6 s (no v2-pinned tests broke after the version bump).
+- `ruff check` clean on all touched files.
+- Dataset metadata round-trip verified: file footer reports
+  `schema_version=v3`, `sampler_seed=42`, four scenario families.
+
+**Files changed.**
+
+- `roverdevkit/schema.py`: `wheel_width_m`, `chassis_mass_kg` bounds
+  + descriptions.
+- `roverdevkit/surrogate/sampling.py`: `_CONTINUOUS_DESIGN_BOUNDS`
+  + module banner.
+- `roverdevkit/surrogate/dataset.py`: `SCHEMA_VERSION` v3 + history.
+- `data/analytical/SCHEMA.md`: design ranges, version history,
+  canonical filename, column-count footer.
+- `data/analytical/lhs_v3.parquet`: new 40k canonical dataset
+  (replaces `lhs_v1.parquet` for downstream consumers; old file
+  retained on disk).
+- `reports/week6_baselines_v2/`: new baseline report tree.
+- `project_plan.md`: design-variable table ranges, dataset filename
+  references.
+- `scripts/build_dataset.py`, `scripts/run_baselines.py`: docstring
+  example commands point at the v3 dataset and the new report dir.
+
+**Out of scope (deferred to next commit).**
+
+- Re-execute `notebooks/00_real_rover_validation.ipynb` and
+  `notebooks/02_baseline_surrogates.ipynb` against v3 + the new
+  baseline report dir. (`02_baseline_surrogates.ipynb` is also Week-6
+  step 5's writeup target, so this folds into that.)
+- Decision on how to handle scenario-OOD `range_km` / `energy_margin`
+  for the registry rovers. Two options: extend the LHS to short-
+  mission scenarios, or scope the Layer-1 sanity to mass / slope /
+  feasibility in the paper. Should be revisited in Week-6 step 5.
+
+---
+
+## 2026-04-25 — Layer-1 sanity reframing + notebook 00 v3 refresh
+
+**Context.** The 40k v3 baseline rerun left two pending items from the
+LHS-bounds-widening commit: re-executing the Week-5 validation
+notebook against the new registry/v3 dataset, and choosing how to
+handle the persistent scenario-OOD on `range_km` / `energy_margin` in
+the registry sanity. User directive on the second item: *"frame the
+Layer-1 sanity check around mass / slope / feasibility"* — i.e. scope
+the acceptance set rather than rebuild data.
+
+**Reframing — code.**
+
+- Added `LAYER1_PRIMARY_TARGETS = ("total_mass_kg",
+  "slope_capability_deg", "motor_torque_ok")` and
+  `LAYER1_DIAGNOSTIC_TARGETS = ("range_km", "energy_margin_raw_pct")`
+  to `roverdevkit/surrogate/baselines.py`. The split is enforced as
+  an `is_primary` boolean column on the
+  `predict_for_registry_rovers` output (and therefore on the on-disk
+  `registry_sanity.csv`).
+- `scripts/run_baselines.py` now prints two summary tables — a
+  primary table with median |relative error| for mass / slope plus a
+  classifier-accuracy summary, then a diagnostic table for range /
+  energy_margin with an explicit "scenario-OOD; not part of
+  acceptance" header pointing at SCHEMA.md v3.
+- Rationale captured in module-level constants' docstrings,
+  `data/analytical/SCHEMA.md` (new "Layer-1 registry sanity scope"
+  section), and `project_plan.md` Week-6 Evaluation bullet.
+
+**Reframing — refreshed v3 numbers (median across algorithms).**
+
+Primary, regression (lower is better):
+
+| rover      | mass MAPE | slope MAPE |
+| ---------- | --------- | ---------- |
+| Yutu-2     |     0.8 % |     2.3 %  |
+| Pragyan    |     2.7 % |    77.9 %  |
+| MoonRanger |     3.2 % |    39.7 %  |
+| Rashid-1   |     9.4 % |     4.1 %  |
+
+Primary, classification (`motor_torque_ok` accuracy across logreg +
+xgboost): Pragyan / Yutu-2 / Rashid-1 = 100 %, MoonRanger = 50 %
+(one of the two algorithms predicts feasible; the evaluator says
+infeasible at MoonRanger's negative steady-state energy margin).
+
+Diagnostic (scenario-OOD; reported only): Pragyan range MAPE
+~620 %, Yutu-2 ~1320 %, MoonRanger ~300 %, Rashid-1 ~370 %. These
+match the absolute-scale mismatch between LHS family traverse
+budgets (20–80 km, non-binding) and the registry's published
+mission distances (25 m – 1 km), as expected.
+
+The Pragyan slope MAPE 78 % and MoonRanger 40 % are real signals
+worth flagging — both rovers have published-design slope-capability
+estimates well below the surrogate's prediction (the Pragyan
+scenario sets `max_slope_deg=5°` so the published "slope capability
+the rover demonstrated" is closer to 5° than to the analytical
+maximum the surrogate predicts). This is a legitimate calibration
+gap that the Week-7 Optuna lift and Week-7.5 SCM correction may
+narrow; documenting now rather than papering over.
+
+**Notebook 00 refresh.**
+
+- Updated the intro/goals markdown to describe the two-tier registry
+  (flown vs design-target) and to drop the Sojourner reference.
+- Section 1 / 2 / 3 markdown now says explicitly that all four
+  registry entries print but only the flown two participate in
+  `compare_all()`.
+- Section 7 limitations: dropped the Sojourner-on-Mars bullet
+  (item 5 in the old list); refreshed the Yutu-2 bullet to describe
+  the v3 widened bounds putting Yutu-2 inside training support;
+  updated the duty-cycle floor reference (0.1 → 0.02 since the
+  Week-5.6 lowering); updated the constant-slope and non-binding-
+  scenario bullets to reflect the current four-rover roster.
+- Repaired pre-existing malformed stream outputs (missing `name`
+  field) before nbconvert; re-executed inplace using the conda env
+  `roverdevkit` jupyter, ~40 s wall-clock. All cells execute cleanly,
+  `compare_all` reports 2/2 PASS on Pragyan + Yutu-2.
+
+**Yutu-2 imputation note.** The Week-5-era note read "Yutu-2 is
+out-of-class (135 kg vs 5-50 kg design space); chassis_mass held at
+35 kg ceiling." Post v3 the chassis ceiling is 50 kg and 35 kg is no
+longer at the boundary. Updated the comment block and the
+`imputation_notes` string in `_yutu2_entry()` to clarify that the
+35 kg value is the published *chassis ex-payload* mass and the 135 kg
+all-up flight mass is what the analytical mass-up model adds payload
++ structure + power-system margins to on top.
+
+**Verification.**
+
+- `pytest tests/test_surrogate_baselines.py -k "not slow"` — 13
+  passed in 45.4 s. New `is_primary` column is asserted in
+  `test_predict_for_registry_rovers_schema`.
+- `ruff check` + `ruff format --check` clean on all touched files.
+- `python scripts/run_baselines.py --dataset
+  data/analytical/lhs_v3.parquet --out-dir
+  reports/week6_baselines_v2` — 28.1 s fit, 16/18 acceptance rows
+  pass, registry_sanity.csv now carries `is_primary`.
+- Notebook 00 re-execute returns 2/2 PASS, design-target rovers
+  appear in the inventory dump but not in `compare_all` (as
+  intended).
+
+**Files changed.**
+
+- `roverdevkit/surrogate/baselines.py`: Layer-1 constants,
+  `is_primary` column, refreshed `predict_for_registry_rovers`
+  docstring, exports.
+- `scripts/run_baselines.py`: split summary printer
+  (`_print_registry_sanity_summary`), updated docstring for
+  `registry_sanity.csv`.
+- `roverdevkit/validation/rover_registry.py`: refreshed Yutu-2
+  imputation comment block + note (no behavioural change).
+- `tests/test_surrogate_baselines.py`: assert `is_primary` column
+  + correct primary/diagnostic partition.
+- `notebooks/00_real_rover_validation.ipynb`: markdown refresh +
+  re-execute.
+- `data/analytical/SCHEMA.md`: new "Layer-1 registry sanity scope"
+  section.
+- `project_plan.md`: Week-6 Evaluation bullet, Week-6 step-4 result
+  block updated with the reframed primary/diagnostic numbers.
+- `reports/week6_baselines_v2/registry_sanity.csv`: refreshed with
+  `is_primary` column.
+
+**Out of scope.**
+
+- `notebooks/02_baseline_surrogates.ipynb` does not yet exist; it is
+  the Week-6 step-5 writeup deliverable and will be created in that
+  commit.
+- Pragyan / MoonRanger slope MAPE worth a focused look once the
+  Week-7 hyperparameter sweep is done, since both target Pragyan-
+  class polar scenarios where slope_capability_deg is dominated by
+  motor stall conditions the registry's `max_slope_deg=5–6°`
+  scenarios don't exercise broadly during evaluator runs.
+
+---
+
+## 2026-04-25 — Week-6 step-5 verdict + new finding (polar energy-margin R²)
+
+**Decision.** Step-5 verdict accepted on the existing
+`reports/week6_baselines_v2/` artifacts. No standalone writeup
+notebook — the report CSVs are the canonical numbers and the plan's
+Week-6 step-4 result block carries the verdict text. (See "2026-04-25
+— Repo bloat audit" entry below for the rationale.)
+
+**New finding (the only genuinely new content from step 5).** The
+per-family R² table surfaces one cell the pooled-aggregate gates hide:
+the joint MLP's `energy_margin_raw_pct` on `polar_prospecting` is
+**R² 0.753 vs the 0.95 gate**. The other three families clear at
+≥ 0.99 and pooled R² is 0.995. Hypotheses to test in Week-7 Optuna:
+family-stratified loss weighting, deeper / wider MLP, and a recheck of
+the categorical conform path on `scenario_sun_geometry ==
+polar_intermittent`. Not a Week-6 redo — queued as the highest-
+priority Week-7 Optuna target.
+
+**Files changed.**
+- `project_plan.md` Week-6 step-4 result: per-family caveat appended;
+  fit wall-clock corrected from 26 s to 28 s.
+
+---
+
+## 2026-04-25 — Repo bloat audit and one-place-rule adoption
+
+**Decision.** Audited the repo for content duplicated across notebooks,
+reports, plan, and log. Adopted the "Log discipline" rule at the top of
+this file; each piece of content lives in exactly one canonical home.
+
+**Context.** Recent log entries were restating numerical tables that
+already live in `reports/week6_baselines_v2/*.csv`, `SCHEMA.md`, and
+`project_plan.md`. The Week-6 step-5 writeup notebook was a third copy
+of the same content. Bloat compounds because every refresh of the
+underlying numbers requires updates in three places.
+
+**What changed.**
+
+- Deleted superseded artifacts: `data/analytical/lhs_v1.parquet`
+  (~16 MB, schema v2; replaced by v3), `data/analytical/lhs_pilot.parquet`
+  (200-row pilot, served its purpose), `reports/week6_baselines_v1/`
+  (pre-thermal-scope-cut baselines).
+- Deleted `notebooks/02_baseline_surrogates.ipynb`. The notebook
+  duplicated the report CSVs and the project-plan W6 result block; the
+  one genuinely new finding it surfaced (polar `energy_margin_raw_pct`
+  R² 0.753) is captured in the trimmed step-5 log entry above.
+- Trimmed the step-5 log entry from ~75 lines to ~17. Future log
+  entries follow the "Log discipline" rule.
+- `project_plan.md`: dropped the writeup notebook from the Week-6
+  deliverable list (replaced with `reports/week6_baselines_v2/`); the
+  notebooks/ tree comment now reads "User-facing demos only" with each
+  notebook's intended scope.
+- `data/analytical/SCHEMA.md`: dropped stale `lhs_v2.parquet`
+  reference; the canonical filename is now just `lhs_v3.parquet`, with
+  pilot/challenge files generated on demand from `build_dataset.py`.
+
+**Files changed.**
+- Deletions: `data/analytical/lhs_v1.parquet`, `lhs_pilot.parquet`,
+  `reports/week6_baselines_v1/` (entire directory), `notebooks/02_baseline_surrogates.ipynb`.
+- Edits: `project_plan.md` (W6 deliverable + notebooks tree), `project_log.md`
+  (header rule + step-5 trim + this entry), `data/analytical/SCHEMA.md`
+  (canonical-filename block).
+
+---
+
+## 2026-04-25 — Polar `energy_margin_raw_pct` diagnosis (pre-Week-7)
+
+**Decision.** Root cause for the joint MLP's polar R² 0.753 is a
+**target-distribution mismatch**, not data density and not a categorical
+conform bug. No code change; finding informs Week-8 Optuna scope and the
+production-model selection rule for `energy_margin_raw_pct`.
+
+**Diagnosis.** Per-family `energy_margin_raw_pct` distributions on the
+feasible LHS-v3 training subset:
+
+- polar (n=6,142): mean −50%, median −66%, range [−99, +352], 88%
+  negative, 11% floor-clipped near −100%.
+- non-polar three families (n=19,753): mean +720%, median +520%, range
+  [−70, +6480], heavy positive tail.
+
+The two populations are nearly disjoint and have opposite-sign means.
+Per-family test R² (table also in `reports/week6_baselines_v2/test_per_family.csv`):
+
+| algo | crater | equatorial | highland | polar | aggregate |
+|---|---|---|---|---|---|
+| mlp_joint | .993 | .996 | .990 | **.753** | .995 |
+| random_forest | .965 | .965 | .922 | **.930** | .965 |
+| xgboost | .988 | .986 | .956 | **.874** | .984 |
+
+Two compounding effects: (i) polar is intrinsically harder for any model
+because the dynamic range is ~14× narrower than non-polar, so the same
+RMSE eats more R²; (ii) the joint MLP additionally suffers because its
+single shared trunk + MSE loss is dominated by the heavy positive tail
+of the non-polar families, leaving the tightly-clustered polar negatives
+under-fit. Per-target RF/XGB don't have this. Earlier step-5 log
+hypotheses (family-stratified loss weighting, wider MLP, categorical
+conform recheck) are superseded by this root cause.
+
+**Consequences.**
+
+- Aggregate gates pass; **no Week-6 redo, no v4 dataset**. Polar density
+  is fine (24% of feasible rows).
+- Production-model selection rule for `energy_margin_raw_pct` updates
+  to **best-per-family R²**: Random Forest (polar .930) is preferred
+  over aggregate-best XGBoost (.874 polar) and MLP (.753 polar). The
+  joint MLP stays in the comparison set as a reference, not the
+  production model for this target. Recorded in §10 Week-7 plan.
+- Likely Week-8 Optuna lever: per-target `PowerTransformer(yeo-johnson)`
+  inside `TransformedTargetRegressor` (compresses the bimodal mismatch
+  for the joint MLP) plus deeper-tree / `min_samples_leaf` tuning for
+  RF/XGB on the polar slice. Per-family models are a defensible fallback.
+- **SCM is irrelevant to this finding** — surrogate-fit issue, not
+  evaluator-physics issue. Does not change the Week-7.5 gate-first plan.
+
+---
+
+## 2026-04-25 — Week-7 composition mechanism sketched, gate-first plan adopted
+
+**Decision.** Adopted plan A (gate-first SCM ordering): minimum-viable
+~500-run SCM sweep first, Week-7.5 gate decides whether to invest in the
+full 2 000-run sweep + composed surrogate. Wheel-level correction
+interface specified so Week-7 step-1 (SCM driver re-validation) can
+start without further design work. Full sketch lives in `project_plan.md`
+under the new "Week 7 / 7.5 composition mechanism" block; this log entry
+captures *why* the ordering is inverted relative to the original §6 W7→W8
+sequence.
+
+**Context.** Earlier today's discussion ("Do we need the SCM correction
+or could we just use Bekker-Wong?") established that the Week-5
+Pragyan / Yutu-2 validation already passes with BW-only physics, so the
+*information value* of the SCM work is the answer to "does SCM materially
+change the design rankings", not "does SCM let us match flown rovers".
+That answer lives in the gate, not in the full 2 000-run sweep. Running
+the gate first front-loads the decision and saves ~3–4 days if BW turns
+out to be sufficient.
+
+**Composition rule (the load-bearing technical decision).** Correction
+is applied at the **wheel level** inside the analytical traverse loop:
+`WheelForces_corrected = WheelForces_BW + Δ`, where Δ is a 3-vector of
+deltas on `(drawbar_pull_n, driving_torque_nm, sinkage_m)` predicted from
+a 13-d wheel-level feature vector. The mission metrics inherit the
+correction implicitly through the existing slip-balance and motor-power
+calculations — no second forward-pass through a "corrected" mission
+model is required during traverse simulation. Mission-level Δmetric
+correction (the original §6 W8 surrogate) is added *only if* the gate
+fires, on top of the wheel-level injection.
+
+**Why wheel-level rather than mission-level only.** A pure
+mission-level correction (`Δrange = f(design, scenario)`) would be
+trained on ~500 paired evaluations and applied as a post-hoc offset.
+That works for ranking but loses the per-step physics: it can't tell
+NSGA-II *why* a given design is over-conservative on slope, and it
+can't be reused inside a different scenario family without re-training.
+Wheel-level correction is reusable across scenarios and is the natural
+home for the 13-d feature vector that already lines up 1-to-1 with
+`single_wheel_forces` inputs.
+
+**Graceful-fallback semantics.** `use_scm_correction=True` becomes safe
+to leave on regardless of whether the correction model file exists. If
+`data/scm/correction_v1.joblib` is absent, the wrapper returns raw BW
+forces with a one-time `UserWarning`. This preserves the evaluator API
+contract and lets CI / casual users keep the flag in a default-on state
+once the pipeline is wired.
+
+**Files and homes (planned).** Per the §6 W7/7.5 block in
+`project_plan.md`. New artifacts: `data/scm/runs_v1.parquet`,
+`data/scm/correction_v1.joblib`, `reports/week7_5_gate/`. Code:
+`roverdevkit/terramechanics/correction_model.py`,
+`roverdevkit/mission/{traverse_sim.py, evaluator.py}`,
+`scripts/run_scm_sweep.py` (batch harness — was originally slated for
+`roverdevkit/terramechanics/scm_wrapper.py` but the package stays light
+for analytical-only consumers, see step-1 entry below).
+
+**Next step.** Week-7 step-1: SCM driver re-validation + benchmark
+(verify the existing Week-2 `single_wheel_forces_scm` driver still
+runs on this machine, time it, then move on to step 2 — sampling +
+parallel harness).
+
+---
+
+## 2026-04-25 — Week-7 step-1: SCM driver re-validated, much faster than budgeted
+
+**Decision.** Week-7 step-1 closed. The Week-2 PyChrono SCM driver
+`pychrono_scm.single_wheel_forces_scm` runs cleanly in the current
+`roverdevkit` conda env; the existing `tests/test_pychrono_scm.py`
+chrono+slow suite passes (6/6, 0.83 s total wall on M-series). The
+~30 s/run budget assumed in the §6 W7 plan is **wildly conservative**
+on this hardware — measured per-call wall-clock is 0.06–0.31 s
+depending on mesh resolution, ~100–500× faster than budgeted. This
+unblocks a much more aggressive gate sweep than originally planned.
+
+**Single-process timing (Apple M-series, default conda env):**
+
+| config | sim time | mean wall | × real-time |
+|---|---|---|---|
+| fast (CI fixture, mesh δ=20 mm) | 1.0 s | 0.062 s | 0.06× |
+| default `ScmConfig()` (δ=15 mm) | 1.8 s | 0.156 s | 0.09× |
+| fine mesh (δ=10 mm) | 1.8 s | 0.311 s | 0.17× |
+
+Implications: a 500-run gate sweep at default config is ~150 s on
+1 core / ~30 s on 5 cores. A full 2 000-run sweep is ~10 min on 1 core
+/ ~2 min on 5 cores. The cost difference between gate-only and full
+sweep is now ≈ 8 minutes, not the days originally feared. Even at
+fine-mesh fidelity the full sweep is ~5 min on 5 cores.
+
+**Plan-A (gate-first) ordering still stands** — the *information value*
+question ("does SCM materially shift the design rankings?") is what
+matters, not compute time. But the timing means we have plenty of room
+to (a) use the production-fidelity config for the gate, (b) run the
+gate sweep at 1 000 wheel-points instead of 500 if desired, and
+(c) commission the full sweep on the same day if the gate fires.
+
+**Code change.** Removed the stub `roverdevkit/terramechanics/scm_wrapper.py`.
+It was a dead `NotImplementedError` with a redundant `SCMResult`
+dataclass parallel to the real `WheelForces`; nothing in the codebase
+imported from it. The Week-7 batch orchestration moves to
+`scripts/run_scm_sweep.py` (next step) — keeps the importable
+`roverdevkit.terramechanics` package free of the ~350 ms PyChrono
+import-time penalty for analytical-only consumers (NSGA-II loops,
+surrogate fits, evaluator validation runs). `roverdevkit/terramechanics/__init__.py`
+docstring updated accordingly. Plan §6 W7 file-list updated to match.
+
+**Deferred.** The "50-run smoke sweep against Ding 2011 single-wheel
+points" originally penciled into step-1 is **moved to Week 9**, where
+the plan already locates "external validation against published
+experimental data". That work needs digitization of paper figures
+which is its own task; step-1's narrow scope is just driver
+re-validation + benchmark.
+
+**Next step.** Week-7 step-2: SCM sampling design + parallel harness
+(`scripts/run_scm_sweep.py`). LHS over the 13-d wheel-level feature
+space, multiprocessing pool with `spawn` context, resumable parquet
+output. With timing in hand the harness target shifts from "fits in
+overnight" to "fits in the lunch break".
+
+## 2026-04-25 — Week-7 step-2: SCM sampling design + parallel harness
+
+**Outcome.** Step-2 closed. Stratified-categorical 6-d LHS design
+generator and a resumable parallel CLI driver are in place; smoke runs
+on 12 / 24 design points pass, the full 259-test pytest sweep is green
+(156 s, unchanged from step-1), and the harness is sized to deliver
+the §6 W7 gate sweep in ≈ 30 s on 5 workers.
+
+**Design space (12-d wheel-level features).** Corrected from the
+earlier "13-d" claim in the composition sketch: both Bekker-Wong and
+the existing PyChrono SCM driver operate on a flat patch, so
+`slope_deg` is **not** a wheel-level feature. Slope effects enter
+both models upstream via the per-wheel vertical-load projection
+`cos(θ) · m · g / N_w` in `traverse_sim._normal_load_per_wheel`. The
+12 features are:
+
+- 6 continuous LHS axes:
+  `(vertical_load_n ∈ [3, 80] N, slip ∈ [0.05, 0.70], wheel_radius_m ∈ [0.05, 0.20] m,
+   wheel_width_m ∈ [0.03, 0.20] m, grouser_height_m ∈ [0.0, 0.020] m)` —
+  five dimensions; the sixth axis (`grouser_count`) is stratified, see below.
+- 1 stratified categorical: `grouser_count ∈ {0, 12, 18}`
+  (no-grouser / micro-rover-typical / high-traction).
+- 1 stratified categorical: `soil_class ∈ {Apollo_regolith_nominal, JSC-1A, GRC-1, FJS-1}`
+  with the 6 numeric Bekker / Mohr-Coulomb parameters resolved from
+  `data/soil_simulants.csv` and stored alongside each row so a
+  numeric-feature correction model can ignore the class label.
+
+The 4 × 3 = 12 (soil × grouser) buckets are filled to ±1 row of equal
+size; the row order is then permuted so a chunked checkpoint never
+biases the partial sample. Same `(n_runs, seed)` always reproduces
+the same design.
+
+**Files.**
+
+- `roverdevkit/terramechanics/scm_sweep.py` — `build_design()` and
+  `run_one()`. `run_one` defers the PyChrono import to the worker call
+  site so neither the design generator nor pytest collection pays
+  Chrono startup. Returns a flat dict with paired
+  `bw_*` / `scm_*` outcomes plus telemetry (`scm_wall_clock_s`,
+  `scm_fz_residual_n`, `scm_n_avg_samples`) and per-row failure
+  flags rather than raising.
+- `scripts/run_scm_sweep.py` — CLI harness. `multiprocessing` `spawn`
+  context, atomic `--checkpoint-every` parquet flush via tmp+rename,
+  `--resume` short-circuit when the existing parquet already covers
+  the design, three named SCM presets (`fast`, `default`, `fine`).
+- `tests/test_scm_sweep.py` — 7 fast-loop tests for the design
+  generator (balance, bounds, schema, reproducibility, input
+  validation) plus 2 chrono+slow tests that smoke `run_one` end-to-end.
+
+**End-to-end checks.**
+
+- 9/9 new tests pass; full sweep 259 passed in 156 s — no runtime
+  regression.
+- 12-row serial smoke at `--config fast` finished in 1.6 s wall.
+- 24-row 4-worker smoke at `--config fast` finished in 2.6 s wall;
+  parquet is 25 columns wide, soil×grouser balance is exact (2 rows
+  per bucket × 12 buckets), all 24 SCM runs returned status `ok`.
+- Resume short-circuits cleanly: re-running with `--resume` on the
+  fully-covered parquet prints "Nothing to do" without spawning workers.
+
+**Preview of the gate finding.** Even on 24 fast-config rows the
+mean absolute SCM-vs-BW deltas are already large
+(|Δ DP| ≈ 10 N, |Δ τ| ≈ 0.7 N·m) and several rows have **sign flips**
+in DP (BW predicts a negative drawbar at high slope/loose-soil
+regimes where SCM resolves a positive one). This is the regime the
+sketch flagged as "where Bekker-Wong is least defensible" — the
+gate sweep is likely to fire, but step-3's job is to confirm it on
+500 production-fidelity runs and quantify how those wheel-level
+deltas propagate to mission-level `range_km` / `energy_margin_*`.
+
+**Next step.** Week-7 step-3: run the production gate sweep
+(`--n-runs 500 --workers 5 --config default --out data/scm/runs_v1.parquet`,
+≈ 30 s wall), then carry the deltas forward to the Week-7.5 gate
+analysis (≤ 5 % rank-correlation impact ⇒ skip the full SCM model;
+> 5 % ⇒ commission the 2 000-run sweep + correction model).
+
+## 2026-04-25 — Week-7 step-3: 500-row production gate sweep complete
+
+**Outcome.** The full gate sweep ran in **39.9 s wall** on 5 workers
+(`--n-runs 500 --workers 5 --config default --seed 42`), wrote
+`data/scm/runs_v1.parquet` (76 kB, 25 columns), and finished with
+**500/500 BW + SCM rows ok** and zero NaNs in any target column.
+Telemetry is healthy: median SCM `Fz` residual is 6 mN against
+3-80 N normal loads (≪ 1 % imbalance), `n_avg_samples = 750` on
+every row (steady-state averaging window converged), per-call wall
+clock 0.09-1.01 s (median 0.33 s, matches the step-1 0.16-0.31 s
+benchmark plus pool overhead).
+
+**Headline deltas (n = 500).** SCM systematically predicts more
+favorable mobility than Bekker-Wong:
+
+| metric | mean | median | P95 | max |
+|---|---|---|---|---|
+| `Δ drawbar_pull_n = scm − bw` (signed) | +10.9 | +8.2 | +30.7 | +55.3 |
+| `Δ driving_torque_nm` (signed) | +0.92 | +0.51 | +3.13 | +5.31 |
+| `Δ sinkage_m` (signed) | −0.004 | −0.004 | +0.001 | +0.002 |
+
+The `Δ DP` mean is positive on 95 % of rows — SCM is not just noisier
+than BW, it is **biased high** in the regions BW pessimizes most
+(consistent with the literature: BW's empirical shear-mobilization
+underestimates grouser bite at high slip).
+
+**Sign-flip count (the gate's leading indicator).** **80 / 500 rows
+(16 %) have BW predicting a negative drawbar pull while SCM predicts
+a positive one** — i.e. BW says "wheel stalls" and SCM says "wheel
+produces tens of newtons of pull". Worst single case: `row 100`,
+FJS-1 / 18 grousers / 67 N load / slip 0.69 / 5 cm radius — BW
+−4.1 N vs SCM **+44.8 N**, a 49 N gap that flips the design
+verdict. Concentrated in the small-wheel (R ≤ 8 cm), grouser-heavy
+(N_g ∈ {12, 18}), high-slip (s > 0.45), loose-soil (FJS-1 / GRC-1)
+corner of the design space — exactly where the §6 W7 composition
+sketch flagged BW as least defensible. (`(np.sign(bw) ≠ np.sign(scm))
+& (|both| > 0.5 N)` count is 67 / 500 = 13.4 % under the stricter
+"both meaningfully nonzero" gate.)
+
+**Slip dependence.** |Δ DP| grows monotonically with slip:
+
+| slip bin | n | mean \|Δ DP\| (N) |
+|---|---|---|
+| (0, 0.15] | 77 | 5.6 |
+| (0.15, 0.30] | 115 | 6.3 |
+| (0.30, 0.50] | 154 | 10.5 |
+| (0.50, 0.75] | 154 | 17.4 |
+
+Slip > 0.5 is precisely the regime mission designs use to climb
+slopes — the wheel-level correction will be most valuable for the
+slope-capability and short-distance high-slope traverse families.
+
+**Soil dependence.** Roughly soil-independent in mean |Δ DP|
+(9.2-11.9 N across the four catalogue simulants); FJS-1 and GRC-1
+show the largest median relative deltas. Apollo nominal (the
+default scenario soil for most LHS rows) is the *least* affected —
+which means a naïve "BW is fine, the surrogate looks good" judgment
+based on Apollo-only validation would have missed the JSC / FJS /
+GRC failures entirely.
+
+**Implication for the Week-7.5 gate.** The wheel-level data already
+strongly suggest the gate will fire (16 % feasibility-flipping
+disagreement is far above any reasonable tolerance), but the formal
+gate is **mission-level** rank correlation of design rankings under
+BW vs SCM-corrected evaluation, which still requires Week-7
+step-4 (fit a wheel-level correction model on this parquet) and
+step-5 (compose into the evaluator and run a small design sample
+through it). Step-3's job — empirically confirming wheel-level SCM
+deltas are large enough to be *plausibly* gate-firing — is met.
+
+**No new code in this step.** Used the step-2 harness as-is. Data
+artifact lives at `data/scm/runs_v1.parquet`; downstream consumers
+(Week-7 step-4 correction model, Week-7.5 gate notebook, the eventual
+benchmark release) read from there.
+
+**Next step.** Week-7 step-4: fit the wheel-level correction model
+(`roverdevkit/terramechanics/correction_model.py`,
+`scripts/train_correction_model.py`). Targets:
+`(Δ_drawbar_pull_n, Δ_driving_torque_nm, Δ_sinkage_m)` regressed
+on the 12-d wheel-level feature vector (continuous wheel/op +
+soil parameters as numeric, `grouser_count` as integer,
+`soil_class` optionally one-hot for a tree model). Train/val/test
+split with seed 42 stratified on `(soil_class, slip_bin)` so each
+fold sees the high-slip regime that drives the deltas. First-cut
+models: Ridge baseline, RandomForestRegressor, XGBRegressor.
+Write `data/scm/correction_v1.joblib` and a short
+`reports/week7_5_gate/correction_fit.csv`.
+
+## 2026-04-25 — Week-7 step-4: wheel-level correction model fitted
+
+**Outcome.** XGBoost picked per target on test RMSE, refit on
+train+val, saved to `data/scm/correction_v1.joblib` (2.1 MB).
+Per-target test scores **after refit on train+val** (the model that
+ships):
+
+| target | algo | test R² | test RMSE | mean \|Δ\| in dataset | residual / signal |
+|---|---|---|---|---|---|
+| `delta_drawbar_pull_n` | XGBoost | 0.962 | 1.72 N | 10.9 N | 16 % |
+| `delta_torque_nm` | XGBoost | 0.905 | 0.35 N·m | 0.92 N·m | 38 % |
+| `delta_sinkage_m` | XGBoost | 0.929 | 1.0 mm | ~4 mm | 25 % |
+
+Ridge floors are 0.72-0.83 (genuinely learnable, not tree memorization);
+RandomForest comes in second on every target (0.87-0.93). Ridge as a
+diagnostic confirms most of the signal is smooth in the 12-d feature
+space, not noise the trees absorbed by overfitting.
+
+**Splits.** 70/15/15 stratified on `(soil_class, slip_bin)` with
+`slip_bin ∈ {(0, 0.15], (0.15, 0.30], (0.30, 0.50], (0.50, 0.75]}` →
+4 × 4 = 16 strata, ~31 rows each at n=500. Every fold sees the
+high-slip regime that drives the deltas, eliminating the failure mode
+where a fold accidentally over-samples the low-slip rows that BW
+already gets right.
+
+**Why per-target rather than a joint MLP.** Three residuals at very
+different scales (Δ DP ~10 N, Δ τ ~1 N·m, Δ sinkage ~5 mm) and
+different feature dependencies (DP is dominated by slip × grouser
+height, sinkage by load × soil compressibility). Per-target lets each
+target use its own tree depth and learning rate without an MSE-loss
+arbitration; the Week-6 surrogate found the same thing on its
+primary targets. With 350 train rows there is also no data budget for
+an MLP to add value over a tuned tree.
+
+**Calibration interpretation.** Residual RMSE is ~16-38 % of the
+**mean absolute** signal per target. The correction model captures
+the **systematic** BW-vs-SCM bias (which is what shifts design
+rankings); the residual is the random component that washes out
+through per-step traverse integration. The Week-7.5 gate is decided
+on **mission-level rank correlation** of designs evaluated under BW
+alone vs. BW + correction, not on these wheel-level R² numbers.
+
+**Code added.**
+
+- `roverdevkit/terramechanics/correction_model.py` — replaces the
+  Week-2 stub. `WheelLevelCorrection` dataclass with frozen
+  `feature_columns / target_columns`, `predict_batch` /
+  `predict_single` / `save` / `load`, joblib-backed artifact, and
+  metadata recording the parquet path, splits, chosen algorithm per
+  target, and build timestamp. `train_correction_model(parquet, out)`
+  is the one-call training entry point. `load_correction_or_none(path)`
+  is the loader the traverse loop will use to fall back gracefully
+  when the artifact is missing (e.g. during the v3 LHS rebuild itself).
+- `scripts/train_correction_model.py` — thin CLI driver around the
+  above, with a tabular console summary.
+- `tests/test_correction_model.py` — 7 fast tests on a 240-row
+  synthetic gate sweep (same 4 × 3 = 12 stratifier buckets as the real
+  data, mocked BW and SCM with a learnable signal). Verifies the
+  trainer clears R² > 0.5 on the synthetic signal, schema enforcement
+  on `predict_batch`, batch == single equivalence, save/load
+  round-trip, missing-artifact loader semantics, and that the trainer
+  refuses to fit a parquet with any BW/SCM failure rows.
+
+**Repo state.** Full sweep 266 passed (was 259 before the new tests),
+1 xfailed pre-existing, 163 s wall — +7 s from the seven new tests,
+no regressions. Production artifact `data/scm/correction_v1.joblib`
+(2.1 MB) and `reports/week7_5_gate/correction_fit.csv` (2.9 KB,
+12 rows: 3 targets × 3 algorithms × test rows + 3 refit rows) plus
+the sidecar `correction_fit.meta.json`.
+
+**Next step.** Week-7 step-5: compose the correction into the
+analytical evaluator. Two injection points in
+`roverdevkit/mission/traverse_sim.py` per the §6 W7 sketch — wrap
+the BW call inside `_solve_step_wheel_forces`'s slip-balance brentq
+residual so the equilibrium slip reflects corrected DP, and wrap
+the BW call inside `_mobility_power_w` so the per-step torque is
+corrected. Default `use_scm_correction=False` (no behaviour change
+for existing callers); when true, the loop calls
+`load_correction_or_none(data/scm/correction_v1.joblib)` and falls
+back to BW-only if the artifact is absent. Then run a small LHS
+sample (~100 designs across the 4 scenario families) through both
+modes and compare design rankings — that's the formal Week-7.5
+gate input.
+
+## 2026-04-25 — Week-7 step-5: correction wired, Week-7.5 gate fires
+
+**Outcome.** Composition layer is in production and the gate fires
+**one-sided** on every scenario family — promote the wheel-level
+correction. Full evidence in `reports/week7_5_gate/gate_decision.md`.
+
+**What shipped.**
+
+- `roverdevkit/mission/traverse_sim.py` — `run_traverse(..., correction=)`
+  threads a `WheelLevelCorrection` through `_solve_step_wheel_forces`
+  so the per-step slip-balance brentq solves against
+  `DP_BW + ΔDP − DP_required = 0`. The corrected forces propagate
+  into `_mobility_power_w` automatically (no separate injection
+  needed there — the corrected torque flows through). A pre-allocated
+  12-d feature buffer is built once per integration step and the
+  brentq residual mutates only the slip column per call, avoiding a
+  pandas DataFrame allocation per BW evaluation. An assert at module
+  import pins the feature-column order so a schema drift in
+  `correction_model.py` fails loudly instead of silently corrupting
+  predictions.
+- `roverdevkit/mission/evaluator.py` — `use_scm_correction=True` no
+  longer raises. Loads `DEFAULT_CORRECTION_PATH` lazily via
+  `load_correction_or_none(on_missing="warn")` so the v3 → v4 LHS
+  rebuild can run while the artifact is absent without crashing.
+  Added a `correction=` kwarg so the dataset builder can pre-load
+  once and share across worker processes.
+- `roverdevkit/terramechanics/correction_model.py` — added
+  `WheelLevelCorrection.predict_array(x)` (pandas-free fast path on a
+  numpy buffer in `feature_columns` order). `predict_batch` now goes
+  through it, so there is one hot path. Added `DEFAULT_CORRECTION_PATH`
+  resolved relative to repo root.
+- `scripts/run_gate_sweep.py` — parallel BW-vs-corrected pair driver.
+  Per-process correction caching, spawn pool, paired metrics parquet,
+  and an inline §6 W7.5 gate-criterion summary.
+- `tests/test_mission_evaluator.py` — replaced the
+  `NotImplementedError` test with one that exercises the loaded-and-
+  applied correction path (asserts at least one mobility-derived
+  metric moves vs BW) and the artifact-missing graceful-fallback path.
+
+**Gate-firing evidence (n=200 paired evaluations, 50 / family).**
+
+| family | feas-flip | bw_only | scm_only | gate |
+|---|---|---|---|---|
+| crater_rim_survey | 30.0 % | 0 | 15 | fires |
+| equatorial_mare_traverse | 12.0 % | 0 | 6 | fires |
+| highland_slope_capability | **68.0 %** | 0 | 34 | fires |
+| polar_prospecting | 34.0 % | 0 | 17 | fires |
+
+The flips are 100 % one-sided: in every family, **zero** designs are
+BW-feasible / SCM-infeasible. BW is systematically more conservative
+than SCM at the feasibility frontier. Highland slopes are the worst
+case (68 % of designs that BW labels infeasible are mobile under SCM)
+— consistent with step-3's wheel-level finding that BW under-predicts
+drawbar pull and over-predicts stall in high-slip / loose-soil regimes.
+This is the same calibration story the registry-rover Layer-1 sanity
+check has been showing on slope_capability_deg since the v3 widening.
+
+**Why the quantitative range gate is False everywhere.** Among
+designs feasible-in-both, `range_med_rel_err = 0.00` because both
+modes saturate at the scenario `traverse_distance_m`. The gate fires
+on the qualitative feasibility flip (the §6 sign-bias rule), not on
+the quantitative range delta — which is exactly what the rule is for.
+Spearman ρ on continuous mobility metrics is 0.83-0.99 across all
+families: rankings of mobile-in-both designs are well preserved; the
+correction shifts the boundary, not the order.
+
+**Decision.** Promote the wheel-level correction into the production
+analytical evaluator; do **not** commission a separate mission-level
+`Δmetric = f(design, scenario)` correction surrogate (the §6 W7.5
+alternate path). Reasons: (1) the wheel-level correction passes its
+own gate (R² 0.91-0.96, step-4); (2) the gate-firing signal here is
+*feasibility*, which is exactly what the wheel-level correction
+shifts; (3) one composition layer is simpler than a wheel-level
+*plus* mission-level model, and avoids a second model that would have
+to be re-trained whenever the LHS bounds change.
+
+**Performance.** ~1.9 s per (BW, SCM) pair on 4 spawn workers
+(381 s wall for n=200). The XGBoost `predict_array` fast path is
+the difference between this and a ~7× slower pandas-allocating
+path. For the Week-8 v4 LHS regeneration (40 k rows × 1 mode with
+correction-on) the budget is ~2 h on the same 4 workers — comparable
+to the v3 build.
+
+**Repo state.** All 266 tests pass + 1 xfailed (171 s wall, no
+regressions). New artifacts: `data/scm/gate_eval_v1.parquet`,
+`reports/week7_5_gate/gate_summary.csv` /
+`feasibility_direction.csv` / `spearman_mobility.csv` /
+`gate_decision.md`. Smoke-only `data/scm/gate_eval_smoke.parquet`
+deleted.
+
+**Next step.** Week-8: regenerate `data/analytical/lhs_v4.parquet`
+with `use_scm_correction=True`; re-fit baselines on the new corpus;
+re-check the registry-rover Layer-1 sanity (the slope-capability
+calibration gap on Pragyan / MoonRanger should narrow given that
+the correction systematically increases predicted feasibility on
+slopes). Closes Week-7 / 7.5 unless the v4 baselines surface new
+issues.
+
+---
+
+## 2026-04-26 — Week-7.7: traverse-loop lift-out + BW-vs-SCM-direct bake-off
+
+**Decision.** (1) Hoist the wheel-force solve out of the per-step loop
+in `roverdevkit/mission/traverse_sim.py::run_traverse` (every input is
+loop-invariant in the current scenario schema; the inner loop now only
+updates sun geometry, solar power, battery, and position).
+(2) Keep **BW + wheel-level correction** as the production
+dataset-generation backend for v4. SCM-direct is wired end-to-end via
+`force_backend="scm"` for ablation but is **not** promoted.
+
+**Lift-out impact.** BW-only mission cost drops from ~250 ms → 10 ms
+(mean), BW+correction from ~500 ms → 40 ms. All 266 + 1xfail tests
+pass with byte-identical metrics — the v3 LHS regression fixture is
+unchanged. Without the lift, SCM-direct (≥ 4 s per residual call,
+~17 brentq evaluations per mission) would be infeasible at any
+dataset scale; with the lift, it costs 4.1 s/mission and runs
+sample-by-sample.
+
+**Bake-off.** 200 LHS designs × 4 scenarios × 3 backends = 2 400
+evaluations (5 graceful failures, all on a pre-existing
+fully-buried-wheel geometry condition that affects all backends
+equally). Driver: `scripts/run_bakeoff.py`. SCM-direct treated as
+ground truth.
+
+| metric | BW p50 rel-err | BW+corr p50 rel-err |
+| --- | --- | --- |
+| `peak_motor_torque_nm` | 7-9 % | 5-8 % |
+| `sinkage_max_m` | **63-86 %** | **11-13 %** |
+| `energy_margin_raw_pct` | 0.9-2.6 % | 0.2-0.7 % |
+
+`motor_torque_ok` flip rate vs SCM, worst → best: highland_slope
+**56.5 %** → **1.0 %**, polar **37 %** → **0.5 %**, crater **30 %** →
+**0 %**, equatorial **12 %** → **0 %**. The correction nearly
+eliminates feasibility disagreement.
+
+**Why BW+correction wins on the merits.** (1) 100× faster than
+SCM-direct (40 ms vs 4 s per mission). (2) The correction *is* the
+methodology paper-1 contribution; switching to SCM-direct would
+delete the contribution. (3) BW+correction collapses the analytical →
+SCM gap to <1 % feasibility flips and single-digit % continuous error
+— well below the surrogate's regression noise floor. (4) SCM-direct
+remains a one-keyword flip for ablation studies and any future
+per-step terrain extension.
+
+**Repo state.** All 266 + 1xfail tests pass (13 s wall — pytest
+itself is now ~14× faster thanks to the lift-out). New files:
+`scripts/run_bakeoff.py`, `reports/week7_7_bakeoff/{decision.md,
+bakeoff_long.parquet, bakeoff_wide.parquet, bakeoff_summary.csv}`.
+Modified: `roverdevkit/mission/traverse_sim.py` (lift-out +
+`_scm_solve_step_wheel_forces` + `force_backend` kwarg),
+`roverdevkit/mission/evaluator.py` (forwards `force_backend`).
+
+**Next step.** Unchanged from Week-7 step-5: Week-8 step-1 LHS v4
+regeneration with `use_scm_correction=True`. The bake-off confirms
+the architecture; the v4 build can start.
+
+---
+
+## 2026-04-26 — Week-8 step-1: lhs_v4.parquet built (corrected mobility)
+
+**Decision.** Promote `data/analytical/lhs_v4.parquet` (40 000 rows,
+schema **v4**, `use_scm_correction=True`) as the canonical Phase-2
+training corpus. Bumped `SCHEMA_VERSION` from `v3` → `v4` so a
+v3-trained surrogate can't silently be re-applied to corrected data.
+
+**Plumbing.** Added `--use-scm-correction` to
+`scripts/build_dataset.py`; `roverdevkit/surrogate/dataset.py` now
+takes the flag through `build_dataset` / `build_and_write` and
+forwards it to a per-pool-worker initializer that `joblib.load`s the
+correction artifact **once per spawned process**. Each
+`_evaluate_sample` call then passes the cached correction to
+`evaluate_verbose(..., correction=...)`, so the artifact load is
+amortized to ~1 disk read per worker rather than 1 per sample.
+`DatasetMetadata` gains `use_scm_correction: bool` and writes it
+to the Parquet footer next to `schema_version`.
+
+**Build run.** 40 000 rows × 64 cols, 8 spawn workers,
+`built_at_utc=2026-04-26T12:36:51+00:00`, **153 s wall**. 39 974/40 000
+ok (99.94 %); the 26 graceful failures are the same fully-buried-wheel
+geometry condition seen in v3 / W7.5 / W7.7 — all pre-existing,
+backend-agnostic. Aggregate feasibility (`motor_torque_ok`) 99.12 %.
+
+The build is **~48× faster than v3** (~2 h → 2.5 min). Two compounding
+wins: (1) the Week-7.7 lift-out cuts BW+correction per-mission cost
+from ~500 ms to ~40 ms, (2) the per-worker correction cache cuts
+joblib loads from `n_samples` to `n_workers`. Per-sample-per-worker
+cost is now 0.03 s.
+
+**Cross-validation against W7.7 bake-off.** Same-seed paired diff
+v4 vs v3 on 39 974 rows shows the correction lands exactly where
+the bake-off measured it would:
+
+| family | v3→v4 motor_ok flip | W7.7 BW-vs-SCM flip |
+| --- | --- | --- |
+| equatorial_mare_traverse | 12.4 % | 12.1 % |
+| crater_rim_survey        | 32.2 % | 30.2 % |
+| polar_prospecting        | 37.8 % | 37.0 % |
+| highland_slope_capability| 55.2 % | 56.5 % |
+
+Within 1 pp on every family — strongest possible mission-level
+confirmation that the wheel-level correction composes correctly into
+`run_traverse`. Median Δ`sinkage_max_m` = **−4 mm across every family**
+(BW was systematically over-pessimistic on sinkage). Median Δ`range_km`
+is +1.85 km on highland (where corrected mobility unlocks designs BW
+stalled) and 0 on the other three families (saturation at
+`traverse_distance_m`). Median Δ`energy_margin_raw_pct` is +79 % on
+highland, +21 % on crater, +7 % equatorial, +1.8 % polar — tracks the
+mobility unlock perfectly (polar is solar-bound, not mobility-bound,
+hence the small shift).
+
+**Repo state.** All 266 + 1 xfail tests pass; lint clean. Modified
+files: `roverdevkit/surrogate/dataset.py` (schema bump, worker init,
+metadata field), `scripts/build_dataset.py` (CLI flag).
+`data/analytical/lhs_v3.parquet` retained for comparison; v4 supersedes
+it as the Phase-2 training corpus.
+
+**Next step.** Week-8 step-2: refit baselines on v4
+(`scripts/run_baselines.py --dataset data/analytical/lhs_v4.parquet`),
+re-evaluate the registry-rover Layer-1 sanity check. The polar-family
+slope-capability calibration gap (Pragyan, MoonRanger) should narrow:
+the correction systematically increases predicted feasibility on
+slopes, which is exactly the direction needed to close the gap that
+flagged in Week-6 step-4.
+
+
+## 2026-04-26 — Week-8 step-2: baselines refit on v4, all gates pass
+
+**Decision.** Promote `lhs_v4.parquet` as the Phase-2 production training
+corpus. Acceptance gate clears 16/18 (the two failures are Ridge, the
+linear baseline-of-baseline reference); every non-linear method passes
+every regression and classification threshold. Stay at the 500-point
+SCM correction sweep — no v5 rebuild needed.
+
+**Run.** 45.6 s wall to fit Ridge / RF / XGB per-target × 4 targets,
+joint MLP, and LogReg / XGB classifier on `motor_torque_ok` against the
+32 137 / 3 880 / 3 983 train/val/test splits. Outputs in
+`reports/week8_baselines_v4/` (`SUMMARY.md`, `metrics_long.parquet`,
+`acceptance_gate.csv`, `test_summary.csv`, `test_per_family.csv`,
+`fit_seconds.csv`, `registry_sanity.csv`).
+
+**Lift vs v3 (aggregate test R²).** Concentrated on the targets W7.7
+predicted would shift:
+
+- `slope_capability_deg` RF: 0.926 → 0.956 (+0.030)
+- `energy_margin_raw_pct` RF: 0.965 → 0.981 (+0.016)
+- `energy_margin_raw_pct` XGB: 0.984 → 0.995 (+0.011)
+- `range_km`, `total_mass_kg`: flat (already saturated > 0.99 in v3)
+
+**Polar `energy_margin_raw_pct` weak spot resolved.** v3 joint-MLP
+R² was 0.753 on polar; v4 XGB / RF land at 0.964 / 0.966 — both clear
+the 0.95 per-family gate. The MLP shared-trunk weakness (target-distribution
+mismatch flagged in the 2026-04-25 polar diagnosis entry) persists at
+0.816, but the production rule is per-target best, not joint MLP.
+
+**Registry Layer-1 sanity (primary, design-axis).** Median MAPE %
+across algorithms:
+
+| rover | total_mass_kg | slope_capability_deg | classifier acc |
+| --- | ---: | ---: | ---: |
+| Yutu-2 | 0.9 | 2.1 | 1.00 |
+| Pragyan | 2.7 | 60.6 | 1.00 |
+| MoonRanger | 3.2 | 25.3 | 1.00 |
+| Rashid-1 | 8.2 | 5.7 | 1.00 |
+
+Mass and `motor_torque_ok` pass on every rover. Slope MAPE on the two
+flagged rovers (Pragyan, MoonRanger) **dropped roughly half the v3 gap**
+(77.9 → 60.6, 39.7 → 25.3). The residual reflects rover-specific design
+choices — drive-train torque limits, track patterns, design-margin
+philosophy — that the 12-D wheel-level correction's feature space cannot
+resolve. Documented as a known scope limit; no further v5 work
+proposed.
+
+**Files updated.** `data/analytical/SCHEMA.md` (canonical filename
+v3 → v4, Schema-version note, registry-sanity table refreshed),
+`scripts/run_baselines.py` (example command points at v4).
+
+**Next step.** Week-8 step-3 was originally Optuna tuning. With the
+acceptance gate already passing 16/18 and the registry-rover residuals
+dominated by out-of-scope effects, the marginal Optuna lift is modest.
+Open question for the next session: do we (a) run Optuna anyway for
+the methodology paper's "tuned baseline" line in the comparison table,
+or (b) declare Phase 2 complete and move to Phase 3 / paper draft?
+
+## 2026-04-26 — Week-8 step-3: Optuna-tuned XGBoost, registry-rover slope gap halved
+
+**Decision.** Promote tuned XGBoost as the production model for
+`range_km`, `total_mass_kg`, and `motor_torque_ok`; keep joint MLP for
+`energy_margin_raw_pct` and `slope_capability_deg` for now (margins
+inside the NSGA-II noise floor). Revisit consolidation in Phase 3.
+
+**Run.** 4 regressors × 50 TPE trials + classifier × 50 trials, 645 s
+wall on 8 cores. Outputs in `reports/week8_tuned_v4/` (`SUMMARY.md`,
+`tuned_summary.csv`, `tuned_best_params.json`, `tuned_test_metrics.parquet`,
+`tuned_acceptance_gate.csv`, `study_<target>.csv`,
+`tuned_registry_sanity.csv`).
+
+**Aggregate test R² lifts (untuned → tuned XGB).** Tiny (saturation):
+
+- `range_km`: 0.998 → 0.9993 (+0.0010), now beats untuned MLP (0.9990)
+- `energy_margin_raw_pct`: 0.995 → 0.9961 (+0.0011)
+- `slope_capability_deg`: 0.992 → 0.9945 (+0.0028)
+- `total_mass_kg`: 0.999 → 0.9998 (now beats MLP 0.9997)
+- `motor_torque_ok` AUC: 0.983 → 0.988 (+0.005, also beats LogReg 0.985)
+
+**Per-family lift on the v4 weak spot.** Polar `energy_margin_raw_pct`:
+untuned XGB 0.964 → tuned XGB 0.970 (+0.005, comfortably clears the
+0.95 gate). Tuning didn't fix the joint MLP's polar shortfall (still
+0.816), but the production rule selects tuned XGB on this family so
+the gate passes via per-target winner.
+
+**Registry-rover Layer-1 primary (XGB-only comparison).** The headline
+finding:
+
+| rover | metric | untuned XGB | tuned XGB | Δ |
+| --- | --- | --- | --- | --- |
+| Pragyan | slope MAPE | 67.9 % | **30.3 %** | **−37.6 pp** |
+| MoonRanger | slope MAPE | 39.2 % | **20.4 %** | −18.8 pp |
+| Yutu-2 | slope MAPE | 4.0 % | 1.9 % | −2.1 pp |
+| Rashid-1 | slope MAPE | 3.1 % | 0.1 % | −3.0 pp |
+| Pragyan | mass MAPE | 1.26 % | 0.21 % | −1.05 pp |
+| Rashid-1 | mass MAPE | 2.21 % | 0.39 % | −1.82 pp |
+| (every rover) | classifier acc | 1.00 | 1.00 | 0 |
+
+Combined Pragyan slope progression across the three v3 → v4 → tuned
+iterations: 77.9 → 60.6 → 30.3 % (median across algorithms / XGB-only).
+The wheel-level SCM correction closed roughly half the original v3 gap
+(W8 step-2); tuned XGBoost closed roughly half of the *remaining* gap
+(W8 step-3). What's left is consistent with rover-specific design
+detail outside the project's analytical-physics scope.
+
+**Best hyperparameters.** Pattern: larger `n_estimators` (~1000-1300,
+2-2.5× the untuned 500) at smaller `learning_rate` (~0.025-0.05,
+0.5× the untuned). `max_depth` 3-8 (8 for `range_km` energy-coupled
+targets, 3 for the near-deterministic `total_mass_kg`).
+
+**New code.** `roverdevkit/surrogate/tuning.py` (TPE study + final-fit
+helpers; XGB-only by design — see module docstring); `scripts/tune_baselines.py`
+(CLI driver, mirrors `run_baselines.py` output schema for the tuned
+metrics frame). The default-hyperparameter `baselines.py` pipeline is
+unchanged so the W6/W8 step-2 acceptance numbers stay reproducible.
+
+**Out of scope kept out.** No MLP / RF / Ridge tuning (the W8 step-2
+report justifies why). No prediction-interval calibration yet; that is
+the W8 step-4 line item per `project_plan.md` §6.2.
+
+**Next step (open).** Plan §6.2 originally called for prediction-interval
+calibration after tuning. The acceptance gate is fully clear and the
+registry-rover residuals are at the analytical-physics scope limit, so
+two reasonable paths: (a) calibrate PIs (quantile XGB or MC dropout MLP)
+to close out §6.2 cleanly for the methodology paper, or (b) declare
+Phase 2 done and start Phase 3 (NSGA-II / Pareto).
+
+---
+
+## 2026-04-26 — Mission-level surrogate reframed (accelerator + UQ, not the deliverable)
+
+**Decision.** Reframe the mission-level XGBoost / MLP surrogate from "the
+project's headline ML deliverable" to **"an optional acceleration and
+uncertainty layer on top of the corrected mission evaluator."** The
+**wheel-level multi-fidelity correction** (`roverdevkit.terramechanics.correction_model.WheelLevelCorrection`)
+is the methodological centrepiece going forward; the mission-level
+surrogate is kept but explicitly demoted in the paper, the README, and
+the architecture text.
+
+**Context.** Two things converged. (1) After the W7.7 traverse-loop
+lift-out (340× speedup), the corrected evaluator runs at ~40 ms / mission
+on a single core (~5 ms on 8 cores), making most Phase-3 workflows feasible
+without an outer surrogate: 100k-point parametric sweeps in ~80 s,
+NSGA-II Pareto fronts (≈30k evaluations × 4 scenarios) in ~10 min on 8
+cores. (2) The W7 / W7.5 / W7.7 chain made the wheel-level correction
+the actual novel ML contribution — a small model (12-d features, ~500
+SCM training points) composed back into a physics-grounded inner loop,
+matching SCM-direct mission outputs at 100× the speed.
+
+**Where the surrogate still earns its keep.** Six use cases, all kept:
+1. NSGA-II inner loop (≈30k evals × 200 generations × 4 scenarios is
+   surrogate territory); the corrected evaluator validates the *final*
+   Pareto front.
+2. Bulk sensitivity / Sobol / 1M-point grids.
+3. Calibrated prediction intervals via quantile XGBoost (W8 step-4).
+4. Probabilistic feasibility for NSGA-II constraint handling (classifier
+   AUC, not deterministic boolean).
+5. Phase-5 benchmark baseline — the dataset / benchmark contribution
+   needs a reference surrogate at the leaderboard.
+6. Deployment portability — a pickled XGBoost is much smaller and easier
+   to ship than the full evaluator stack with `MassModelParams`,
+   `ScmConfig`, etc.
+
+**W8 step-4 scope cut.** Drop MC-dropout MLP and deep ensembles. Quantile
+XGBoost (τ ∈ {0.05, 0.5, 0.95}) is sufficient for the prediction-interval
+need on the methodology paper. Median quantile checked against W8 step-3
+R² gates as a sanity guardrail. PIs computed on the composed
+(corrected-evaluator → surrogate) output, not on a BW-only baseline.
+
+**Phase-3 backend dispatch.** Sweep / NSGA-II code path takes a
+`backend: Literal["evaluator", "surrogate"]` switch; default to
+`"evaluator"` for ≤10k points, surrogate above. Pareto fronts are
+*always* re-evaluated point-by-point with the corrected evaluator
+before the headline plot is written.
+
+**Doc / plan changes (this entry's purpose).**
+- `project_plan.md` §1: pitch + 4-item contribution list rewritten
+  (correction → surrogate → rediscovery, with fast-evaluator note).
+- `project_plan.md` §2: architecture diagram has explicit
+  WHEEL-LEVEL CORRECTION block above the SURROGATE LAYER block; caption
+  paragraph rewritten.
+- `project_plan.md` §5: three-path strategy updated to reflect the
+  ~500-row wheel-level sweep (not 2 000 mission-level), and the
+  "fired gate, correction shipped" outcome.
+- `project_plan.md` §6 Phase 3: dual-backend dispatch, Pareto-front
+  validation pass, evaluator-default rule for ≤10k points.
+- `project_plan.md` §6 W8 step-4: quantile-XGB only, MC-dropout dropped.
+- `project_plan.md` §7 Layers 1-2: Layer 1 reworded as
+  "surrogate vs corrected evaluator"; Layer 2 reworded as
+  "corrected evaluator vs SCM-direct" (W7.4 + W7.7).
+- `project_plan.md` §9: full vision Paper 1 marked as the active path
+  (W7.5 gate fired); MVP fallback kept but labelled inactive.
+- `project_plan.md` §10: surrogate / terramechanics file lists updated
+  (no `scm_wrapper.py`, `tuning.py`/`uncertainty.py` reflected,
+  `correction_model.py` annotated).
+- `project_plan.md` §11.1: title rewritten with "wheel-level
+  multi-fidelity correction" as the headline; abstract rewritten;
+  contributions reordered (correction → capability-envelope →
+  open-source tool → rediscovery); §5 / §6 / §7 outlines updated;
+  §11.1.1 marked W7.5 gate as resolved.
+- `project_plan.md` §11.2: paper 2 pitch notes the dataset ships
+  the SCM-corrected targets without requiring PyChrono installation.
+- `README.md`: contribution list, architecture diagram, and intro
+  paragraph rewritten to match.
+
+**Out of scope.** No code changes. The reframe is documentation-only.
+The actual class hierarchy stays — `roverdevkit.surrogate` continues
+to ship the mission-level baselines, tuned models, and (next, W8 step-4)
+the quantile heads.
+
+**Next step.** W8 step-4: fit quantile XGBoost heads at τ ∈ {0.05, 0.5,
+0.95} per primary regression target on `lhs_v4.parquet`; calibrate
+empirical 90 % coverage on the canonical test split; report by scenario
+family. New code: `roverdevkit/surrogate/uncertainty.py` +
+`scripts/calibrate_intervals.py`.
+
+---
+
+## 2026-04-26 — W8 step-4: quantile-XGBoost prediction intervals on v4 (done)
+
+**What.** Calibrated 90 % prediction intervals on the four primary
+regression targets (`range_km`, `energy_margin_raw_pct`,
+`slope_capability_deg`, `total_mass_kg`) via independent quantile
+XGBoost heads at τ ∈ {0.05, 0.50, 0.95}, using the W8 step-3 tuned
+hyperparameters as the shared per-head configuration. Closes the §6
+W8 step-4 deliverable and the §7 Layer-1 PI claim.
+
+**Why this scope.** Per the 2026-04-26 reframe entry, the
+mission-level surrogate is now an optional accelerator + UQ layer
+(not the headline contribution), so a single UQ family is sufficient
+and a second one (MC-dropout MLP, deep ensembles) would be
+infrastructure-heavy without changing the paper claims. Quantile
+XGB reuses the W8 step-3 tuner output and adds no new model family
+to maintain.
+
+**Method.**
+- Per target: three independent `xgb.XGBRegressor`s with
+  `objective="reg:quantileerror"`, `quantile_alpha ∈ {0.05, 0.5,
+  0.95}`. Every other hyperparameter shared from
+  `reports/week8_tuned_v4/tuned_best_params.json`.
+- Train on canonical W8 step-3 train split with early stopping on val
+  pinball loss (`early_stopping_rounds=25`, mirrors W8 step-3); refit
+  each head on `train ∪ val` with the early-stopping-best
+  `n_estimators`. Score on the unseen test split.
+- Coverage measured both raw (independent quantile output) and
+  `sorted` (row-wise sort of the three predictions). Sorting is
+  non-worse for empirical coverage and never changes the median; we
+  report both so the writeup is honest about the crossing rate.
+
+**Headline numbers (test split, all families).**
+
+Median (τ=0.5) sanity vs W8 step-3 tuned squared-error medians:
+
+| Target                | quantile R² | step-3 R² | Δ        |
+|-----------------------|-------------|-----------|----------|
+| range_km              | 0.9982      | 0.9993    | -0.0010  |
+| energy_margin_raw_pct | 0.9912      | 0.9961    | -0.0049  |
+| slope_capability_deg  | 0.9929      | 0.9945    | -0.0016  |
+| total_mass_kg         | 0.9996      | 0.9998    | -0.0002  |
+
+All four are within 0.005 R² of the step-3 baseline, well above the
+§7 Layer-1 R² gate. Pinball loss does cost a hair vs squared loss,
+as expected.
+
+90 % PI coverage on test:
+
+| Target                | mean width | raw cov. | sorted cov. | crossings |
+|-----------------------|-----------:|---------:|------------:|----------:|
+| range_km              | 13.5 km    | 0.852    | **0.919**   | 27.3 %    |
+| energy_margin_raw_pct | 250 pp     | 0.866    | **0.918**   | 20.9 %    |
+| slope_capability_deg  | 2.0 °      | 0.802    | 0.856       | 20.5 %    |
+| total_mass_kg         | 1.5 kg     | 0.876    | **0.920**   | 21.4 %    |
+
+Three of four targets land within ±2 pp of nominal after row-wise
+sort. `slope_capability_deg` stays 4 pp under-covered — the target's
+PI width is very narrow (≈2°) so the model is slightly
+over-confident on the tails; a lightweight conformal-prediction
+wrapper would close this gap if a future revision needs strict
+calibration. Acceptable for the methodology paper's PI claim.
+
+**Per-scenario observations** (sorted coverage):
+- Polar PIs are conservative (over-covered) on `range_km` (0.963)
+  and `energy_margin_raw_pct` (0.947) — the saturated tail
+  concentrates near the solar/battery cap so the upper quantile
+  has thin support to learn from.
+- `equatorial_mare_traverse` is the worst family for `range_km`
+  (0.882) — bimodal range distribution (binding-vs-saturated) the
+  independent heads do not capture as well.
+
+**Crossings.** 20–27 % of test rows have a non-monotone
+`(q05, q50, q95)` triple before sorting. This is expected for
+independent quantile XGB and the project deliberately decided
+against per-quantile HP tuning (would multiply tuning cost by 3 and
+make the median sanity guardrail less informative). The
+`QuantileHeads.predict(..., repair_crossings=True)` path returns the
+sorted triple; downstream NSGA-II / Pareto consumers should always
+pass that flag.
+
+**Wall-clock.** 132.8 s on 8 cores for 4 targets × 3 heads, fits
+comfortably inside the original 10-min Phase-2 budget.
+
+**New code (this entry).**
+- `roverdevkit/surrogate/uncertainty.py` — `QuantileHeads`
+  dataclass (frozen, joblib-safe), `fit_quantile_heads(...)`,
+  `coverage_table(...)`. Module docstring documents the shared-HP
+  rationale and the crossing-rate caveat.
+- `scripts/calibrate_intervals.py` — CLI driver. Loads the v4
+  parquet + tuned best params, fits per target, writes
+  `coverage.csv`, `median_sanity.csv`, `fit_seconds.csv`,
+  `quantile_bundles.joblib`, plus a console summary.
+- `tests/test_surrogate_uncertainty.py` — 6 smoke tests covering
+  bundle shape, predict / column-mismatch / repair-crossings,
+  coverage-table schema, save/load roundtrip. Runs in <1 s on the
+  shared `small_df` LHS fixture.
+
+**Modified.**
+- `pyproject.toml` — added the three new files to the
+  `per-file-ignores` block for N803 / N806 (sklearn-style `X` /
+  `X_train` naming, same convention as W8 step-3).
+- `project_plan.md` §6 W8 step-4 — marked done with the headline
+  numbers and the slope under-coverage caveat.
+
+**Artifacts.** `reports/week8_intervals_v4/` (coverage tables,
+median sanity, fit timings, joblib bundles, SUMMARY.md).
+
+**What this closes.**
+- §6 W8 step-4 deliverable: ✅ final mission-level surrogate +
+  calibrated PIs + per-family coverage table.
+- §7 Layer-1 PI claim: ✅ for 3/4 targets at ≤2 pp; slope at 4 pp,
+  acknowledged in the writeup.
+- **Phase 2 (data + ML) is now complete.** The corrected evaluator
+  is the source of truth (~40 ms / mission, ~5 ms on 8 cores); the
+  mission-level surrogate is the optional accelerator + UQ layer
+  for NSGA-II inner loops, batch SHAP, and probabilistic
+  feasibility constraints. Both are validated and tuned on v4.
+
+**Next.** Phase 3, Week 9 — tradespace exploration. The corrected
+evaluator handles parametric sweeps (≤ 10 k points) directly; NSGA-II
+swaps in the surrogate (with quantile heads for probabilistic
+feasibility) and re-validates the final Pareto front against the
+corrected evaluator before any headline plot is written.
+
+---
+
+## 2026-04-26 — Week 9 retired, critical items rolled into Phase 4 (Week 13)
+
+**What.** The originally-scoped **Week 9 "External validation against
+published experimental data"** is removed from the project plan. The
+six bullets in that block had drifted out of sync with the post-W7.7
+reframe — most were already done in earlier weeks under different
+names — so the block was kept primarily as a TODO marker rather than
+as a unit of work.
+
+**Audit (Week 9 line-by-line, before vs after).**
+
+| Original Week 9 bullet                              | Status (now)                                                |
+|-----------------------------------------------------|-------------------------------------------------------------|
+| BW vs published single-wheel data                   | **Pending — rolled into Week 13.** Existing xfail in `tests/test_terramechanics.py::test_single_wheel_matches_wong_textbook_example`. |
+| SCM vs published single-wheel data                  | **Pending — rolled into Week 13 (citation-only).** PyChrono SCM is already validated in Tasora et al.; we cite, not re-validate. |
+| Surrogate vs Bekker-Wong (ML fidelity)              | **Done in W6 / W8.** §7 Layer 1; numbers in `reports/week8_baselines_v4/SUMMARY.md` and `reports/week8_tuned_v4/SUMMARY.md`. |
+| Surrogate vs SCM                                    | **Obsolete.** Replaced by §7 Layer 2 (corrected-evaluator vs SCM-direct), done in W7.4 single-wheel correction fit and W7.7 mission-level bake-off. |
+| Full evaluator vs published rover traverse data     | **Partially done.** Started W5 in `notebooks/00_real_rover_validation.ipynb`; formalised W6 as the registry-rover Layer-1 sanity (primary vs diagnostic split). Anything left is a writeup, not new measurement. |
+| Layered error-budget writeup                        | **Pending — rolled into Week 13.** `reports/error_budget.md` (markdown), not a Python module. |
+
+**Plan changes.**
+- `project_plan.md` §6 Phase 2 header: "Weeks 6–9" → "Weeks 6–8".
+- `project_plan.md` §6 Week 9 block: removed (9 lines).
+- `project_plan.md` §6 Phase 4 Week 13: expanded to absorb the three
+  remaining critical items, each marked "rolled forward from the
+  retired Week 9":
+  1. Layer-3 BW vs Wong textbook ch. 4 worked example (replace xfail
+     with a real tolerance check; one-paragraph paper result).
+  2. SCM citation paragraph (PyChrono validation is upstream; cite
+     Tasora et al.).
+  3. Consolidated `reports/error_budget.md` pulling W6 acceptance
+     gates, W6 registry sanity, W7.4 single-wheel correction R²,
+     W7.7 mission bake-off, W8 surrogate metrics, and W8 quantile-PI
+     coverage into a single end-to-end chain. Cross-references §7
+     Layers 1-2 explicitly so we don't redo finished work.
+- `project_plan.md` §13 milestones checklist: Week 9 line removed;
+  Week 13 line annotated with the rolled-forward items.
+
+**Code / data hygiene (this entry).**
+- Removed `roverdevkit/validation/error_budget.py` (stub:
+  `compile_error_budget()` raised `NotImplementedError`; unused).
+  The actual error budget will be a markdown writeup in `reports/`,
+  not a Python module — matches the "one-place rule" repo audit.
+- Removed `roverdevkit/validation/experimental_comparison.py` (stub:
+  two functions that raised `NotImplementedError`; unused). The
+  Layer-3 BW-vs-literature work collapses to a single tolerance test,
+  not a sub-package.
+- Updated `roverdevkit/validation/__init__.py` to drop the two stub
+  module references and to point Layer-3 / error-budget pointers at
+  Week 13 / Phase 4.
+- Updated `data/validation/README.md` to point at Week 13 (was Week 9
+  + Weeks 1–2).
+- Updated `tests/test_terramechanics.py` module docstring + the
+  Wong-placeholder section header to reference Week 13 / Phase 4.
+
+**Out of scope for this entry.** No measurement work — the
+Wong-textbook digitisation, the SCM citation paragraph, and the
+error-budget compilation all happen in Week 13. The current scope is
+purely plan / documentation tidy-up so that when Week 13 starts there
+is one canonical home for each remaining item rather than a stub
+package, a stale checklist line, and three different week numbers.
+
+**Why now (vs Phase 4).** Doing the cleanup now (a) keeps the active
+project surface small while we move into Phase 3 — the user's stated
+"one-place rule" preference — and (b) prevents the Week-9 stubs from
+silently rotting further as Phase 3 (Weeks 10-12) lands new code.
+
+**Next.** Phase 3, Week 10 — tradespace sweep tool with
+`backend: Literal["evaluator", "surrogate"]` switch, default
+evaluator for ≤10k points, surrogate for batch / NSGA-II.

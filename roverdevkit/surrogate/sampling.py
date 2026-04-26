@@ -64,11 +64,19 @@ SplitName = Literal["train", "val", "test"]
 
 
 # Continuous design variables swept by LHS (order matters; see _unscale_design).
+#
+# Bounds widened in SCHEMA_VERSION v3 (2026-04-25) for `wheel_width_m`,
+# `grouser_height_m`, and `chassis_mass_kg` so the flown / design-target
+# lunar micro-rovers in `roverdevkit.validation.rover_registry` sit
+# inside the surrogate's training support rather than at corner points
+# of the cube. See project_log.md for the rationale and the registry
+# entries (Yutu-2 mass ~35 kg ex-payload, Rashid-1 grouser 15 mm,
+# Lunokhod-class wheel widths 20 cm) that motivated the widening.
 _CONTINUOUS_DESIGN_BOUNDS: tuple[tuple[str, float, float], ...] = (
     ("wheel_radius_m", 0.05, 0.20),
-    ("wheel_width_m", 0.03, 0.15),
-    ("grouser_height_m", 0.0, 0.012),
-    ("chassis_mass_kg", 3.0, 35.0),
+    ("wheel_width_m", 0.03, 0.20),
+    ("grouser_height_m", 0.0, 0.020),
+    ("chassis_mass_kg", 3.0, 50.0),
     ("wheelbase_m", 0.3, 1.2),
     ("solar_area_m2", 0.1, 1.5),
     ("battery_capacity_wh", 20.0, 500.0),

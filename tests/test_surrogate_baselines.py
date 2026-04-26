@@ -273,8 +273,20 @@ def test_predict_for_registry_rovers_schema(fitted: FittedBaselines) -> None:
         "evaluator",
         "abs_error",
         "rel_error",
+        "is_primary",
     }
-    assert set(df["rover"]) == {"Pragyan", "Yutu-2", "Sojourner"}
+    assert set(df["rover"]) == {"Pragyan", "Yutu-2", "MoonRanger", "Rashid-1"}
+
+    # is_primary partitions targets into design-axis vs scenario-OOD groups
+    # (see baselines.LAYER1_PRIMARY_TARGETS / LAYER1_DIAGNOSTIC_TARGETS).
+    primary_targets = set(df.loc[df["is_primary"], "target"])
+    diagnostic_targets = set(df.loc[~df["is_primary"], "target"])
+    assert primary_targets == {
+        "total_mass_kg",
+        "slope_capability_deg",
+        "motor_torque_ok",
+    }
+    assert diagnostic_targets == {"range_km", "energy_margin_raw_pct"}
 
     # Every rover should have one row per regression (algo, target) cell
     # plus the joint MLP plus the classifiers; no NaN in evaluator/predicted.

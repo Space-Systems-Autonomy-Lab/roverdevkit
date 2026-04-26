@@ -82,6 +82,12 @@ ignore = ["E501"]
 # in surrogate ML code; lowercase variants would obscure the standard
 # convention.
 "roverdevkit/surrogate/baselines.py" = ["N806"]
+"roverdevkit/surrogate/tuning.py" = ["N803", "N806"]
+"roverdevkit/surrogate/uncertainty.py" = ["N803", "N806"]
+"scripts/tune_baselines.py" = ["N806"]
+"scripts/calibrate_intervals.py" = ["N806"]
+"tests/test_surrogate_tuning.py" = ["N806"]
+"tests/test_surrogate_uncertainty.py" = ["N803", "N806"]
 
 [tool.ruff.format]
 quote-style = "double"

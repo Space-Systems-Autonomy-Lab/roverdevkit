@@ -1,0 +1,20 @@
+# Validation scenario — MoonRanger lunar South Pole demo (CMU/Astrobotic).
+# Not a canonical tradespace scenario; used only by
+# roverdevkit/validation/rover_registry.py for the design-target
+# Layer-1 surrogate sanity check (rover never flew — slipped from the
+# original Masten XL-1 / 2022 manifest; design target reference).
+#
+# Source: Kumar et al. i-SAIRAS 2020 paper (#5068, "Formulation of
+# Micro-Rover Autonomy Software for Lunar Exploration"), MoonRanger
+# Project labs page (labs.ri.cmu.edu/moonranger/), Astrobotic NASA
+# LSITP award announcement (Sep 2020). Latitude representative of the
+# planned south-polar landing region; max_slope_deg conservative for
+# polar-exploration ops (rover targets ice-rich PSR margins).
+name: moonranger_polar_demo
+latitude_deg: -85.0
+traverse_distance_m: 2000.0           # 1 km/Earth-day x 8 Earth-day mission, soft cap
+terrain_class: polar_regolith
+soil_simulant: Apollo_regolith_loose  # matches Pragyan's polar choice
+mission_duration_earth_days: 8.0      # Kumar et al. 2020: "eight Earth days"
+max_slope_deg: 6.0                    # typical-ops; ride PSR-margin terrain like Pragyan
+sun_geometry: polar_intermittent

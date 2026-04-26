@@ -100,6 +100,42 @@ trained once (across all primary targets) rather than once per target;
 keeping it under a separate key makes the per-(algo, target) loop
 unambiguous."""
 
+LAYER1_PRIMARY_TARGETS: tuple[str, ...] = (
+    "total_mass_kg",
+    "slope_capability_deg",
+    "motor_torque_ok",
+)
+"""Primary acceptance set for the registry-rover Layer-1 sanity check
+(``predict_for_registry_rovers``). These three metrics depend on the
+rover's *design* vector — chassis + wheels for mass, soil + wheel
+geometry for slope capability, motor sizing × terramechanics for
+feasibility — and the v3 widened LHS bounds put every flown / design-
+target rover in the registry inside the surrogate's training support
+on these dimensions. They are the metrics on which the Layer-1 sanity
+check is treated as a real accuracy gate.
+
+The two excluded targets are :data:`LAYER1_DIAGNOSTIC_TARGETS`."""
+
+LAYER1_DIAGNOSTIC_TARGETS: tuple[str, ...] = (
+    "range_km",
+    "energy_margin_raw_pct",
+)
+"""Targets emitted by the Layer-1 sanity check for diagnostic purposes
+only and explicitly excluded from the primary acceptance set.
+
+Both are *scenario*-OOD for the registry rovers: their published
+mission distances (Pragyan ≈ 100 m, Yutu-2 ≈ 25 m / lunar day,
+MoonRanger ≈ 1 km / Earth-day, Rashid-1 ≈ 1 km) are 100-1000x smaller
+than the LHS family traverse-distance budgets (20-80 km, intentionally
+non-binding so ``range_km`` stays a continuous signal during training).
+The surrogate's predictions live in the family-budget regime; the
+Layer-1 truth values are the much smaller registry-scenario evaluator
+outputs, so the relative error is dominated by an absolute-scale
+mismatch with no bearing on physical model accuracy.
+
+See ``data/analytical/SCHEMA.md`` v3 entry and ``project_log.md``
+2026-04-25 LHS v3 entry for the full diagnosis."""
+
 # Numeric columns that must be scaled for Ridge / MLP. Tree models
 # (RF, XGB) don't care, but the same preprocessor is used for them so
 # the column-trim step is uniform; the cost of scaling is negligible.
@@ -693,9 +729,9 @@ def _row_for_registry_rover(
         "scenario_soil_shear_modulus_k_m": float("nan"),
         # Categorical: use the LHS family the rover most resembles so
         # XGBoost native-categorical handling has a value within the
-        # learned codebook. Pragyan/Yutu-2 -> polar_prospecting if
-        # high-latitude, equatorial otherwise; Sojourner is Mars but
-        # closest to mare_nominal terrain.
+        # learned codebook. Lunar-only registry as of 2026-04-25; the
+        # latitude/slope rules below pick the closest LHS family for
+        # any new entry.
         "scenario_family": "equatorial_mare_traverse",
         "scenario_terrain_class": str(scenario.terrain_class),
         "scenario_soil_simulant": str(scenario.soil_simulant),
@@ -751,20 +787,43 @@ def _row_for_registry_rover(
 def predict_for_registry_rovers(
     fitted: FittedBaselines,
     *,
-    rover_names: tuple[str, ...] = ("Pragyan", "Yutu-2", "Sojourner"),
+    rover_names: tuple[str, ...] = ("Pragyan", "Yutu-2", "MoonRanger", "Rashid-1"),
 ) -> pd.DataFrame:
-    """Layer-1 sanity check: each baseline vs the evaluator on real rovers.
+    """Layer-1 sanity check: each baseline vs the evaluator on registry rovers.
 
-    For each (rover, algorithm, target) we report:
+    Default roster covers two flown lunar rovers (Pragyan, Yutu-2)
+    plus two design-target lunar micro-rovers (MoonRanger, Rashid-1).
+    The Mars-gravity Sojourner sentinel was removed when the project
+    narrowed to lunar micro-rovers (project_log.md 2026-04-25).
 
+    Layer-1 framing
+    ---------------
+    Output rows carry an ``is_primary`` boolean that splits the targets
+    into two groups (``project_log.md`` 2026-04-25 LHS v3 entry):
+
+    - ``is_primary=True`` — :data:`LAYER1_PRIMARY_TARGETS`
+      (``total_mass_kg``, ``slope_capability_deg``, ``motor_torque_ok``).
+      Design-axis metrics where the v3 widened LHS bounds put the
+      registry inside training support; treated as the real Layer-1
+      acceptance set.
+    - ``is_primary=False`` — :data:`LAYER1_DIAGNOSTIC_TARGETS`
+      (``range_km``, ``energy_margin_raw_pct``). Scenario-OOD because
+      the registry's published mission distances are 100-1000x smaller
+      than the LHS family budgets; reported for diagnostic purposes
+      only and *not* an acceptance signal.
+
+    Columns
+    -------
     - ``predicted`` — surrogate output
     - ``evaluator`` — Layer-1 ground truth
     - ``abs_error`` / ``rel_error`` — same convention as the per-scenario
       breakdown so downstream readers can use one mental model.
+    - ``is_primary`` — see "Layer-1 framing" above.
 
     The classifier reports its predicted feasibility probability
     against the evaluator's binary ``motor_torque_ok``.
     """
+    primary_targets = set(LAYER1_PRIMARY_TARGETS)
     rows: list[dict[str, Any]] = []
     for name in rover_names:
         X_row, evaluator_metrics = _row_for_registry_rover(
@@ -782,6 +841,7 @@ def predict_for_registry_rovers(
                     "evaluator": y_true,
                     "abs_error": y_hat - y_true,
                     "rel_error": (y_hat - y_true) / y_true if y_true != 0 else float("nan"),
+                    "is_primary": target in primary_targets,
                 }
             )
         if fitted.joint_mlp is not None and fitted.mlp_targets:
@@ -800,6 +860,7 @@ def predict_for_registry_rovers(
                         "evaluator": y_true,
                         "abs_error": y_hat - y_true,
                         "rel_error": ((y_hat - y_true) / y_true if y_true != 0 else float("nan")),
+                        "is_primary": target in primary_targets,
                     }
                 )
         for algo, clf in fitted.classifiers.items():
@@ -817,6 +878,7 @@ def predict_for_registry_rovers(
                     "evaluator": float(y_true_bool),
                     "abs_error": p - float(y_true_bool),
                     "rel_error": float("nan"),
+                    "is_primary": FEASIBILITY_COLUMN in primary_targets,
                 }
             )
     return pd.DataFrame(rows)
@@ -827,6 +889,8 @@ __all__ = [
     "CLASSIFIER_ALGORITHMS",
     "FittedBaselines",
     "JOINT_MLP_NAME",
+    "LAYER1_DIAGNOSTIC_TARGETS",
+    "LAYER1_PRIMARY_TARGETS",
     "REGRESSION_ALGORITHMS",
     "acceptance_gate",
     "evaluate_baselines",

@@ -1,10 +1,28 @@
-"""ML surrogate layer over the mission evaluator.
+"""Mission-level surrogate as an acceleration and uncertainty layer.
 
-The surrogate learns the same capability-envelope mapping the evaluator
-computes (``design -> MissionMetrics``), including both the clipped
-``energy_margin_pct`` and its unclipped training companion
-``energy_margin_raw_pct``. Operational-utilisation queries are a
-downstream wrapper on top of this layer, not a separate surrogate.
+**Reframed scope (project_log.md 2026-04-26).** After the W7.7 traverse-loop
+lift-out the corrected mission evaluator runs at ~40 ms / mission, so this
+package is no longer the project's "fast path." It is an *optional* layer
+on top of the corrected evaluator that exists for:
+
+1. NSGA-II inner-loop fitness function (≈30k evals × 4 scenarios is
+   surrogate territory; the corrected evaluator validates the final
+   Pareto front).
+2. Bulk sensitivity / Sobol / 1M-point grids where 40 ms × N becomes
+   uncomfortable.
+3. Calibrated 90 % prediction intervals via quantile XGBoost (W8 step-4).
+4. Probabilistic feasibility for NSGA-II constraint handling
+   (classifier AUC, not deterministic boolean).
+5. Phase-5 benchmark baseline.
+6. Deployment portability (a pickled XGBoost is much smaller than the
+   full evaluator stack).
+
+The wheel-level multi-fidelity correction lives elsewhere — see
+:class:`roverdevkit.terramechanics.correction_model.WheelLevelCorrection`
+— and is composed into the analytical traverse loop directly, not via
+this package.
+
+Modules:
 
 - :mod:`.sampling` — stratified Latin-Hypercube sampler over the 12-D
   design space × 4 scenario families with jittered scenario/soil
@@ -14,15 +32,19 @@ downstream wrapper on top of this layer, not a separate surrogate.
   DataFrame of evaluator outputs plus aggregate traverse-log
   statistics.
 - :mod:`.features` — feature engineering (dimensionless groups,
-  physics-informed transforms). Week 6.
-- :mod:`.models` — XGBoost (primary), sklearn baselines, and optional
-  PyTorch NN ensemble. Includes the multi-fidelity composition
-  ``final = analytical_surrogate + correction_surrogate`` (Week 7).
-- :mod:`.train` — cross-validation, Optuna tuning. Week 6-7.
-- :mod:`.uncertainty` — calibrated prediction intervals.
+  physics-informed transforms).
+- :mod:`.baselines` — Ridge / RF / XGBoost per target + joint MLP +
+  feasibility classifier. The default-hyperparameter pipeline used by
+  W6 / W8 step-2.
+- :mod:`.tuning` — Optuna TPE on XGBoost (W8 step-3).
+- :mod:`.metrics` — R²/RMSE/MAPE, AUC/F1, per-scenario-family
+  breakdowns, the canonical ``benchmark_score`` API.
 
-Target accuracy (project_plan.md §7 Layer 1):
-    R² > 0.95 for range_km and energy_margin_pct; R² > 0.85 for slope.
+Target accuracy (project_plan.md §7 Layer 1, surrogate vs corrected
+evaluator):
+    R² > 0.95 for range_km and energy_margin_raw_pct; R² > 0.85 for
+    slope_capability_deg and total_mass_kg; AUC > 0.90 for
+    motor_torque_ok feasibility.
 """
 
 from roverdevkit.surrogate.baselines import (

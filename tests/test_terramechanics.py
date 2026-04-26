@@ -10,9 +10,11 @@ Week-1 coverage is physics-first-principles sanity:
   drawbar pull to within model-form noise,
 - sub-millisecond runtime.
 
-Quantitative comparison to published single-wheel experiments (Ding 2011,
-Iizuka & Kubota 2011) lands in Week 9 once the validation CSVs are
-digitized; see ``data/validation/README.md``.
+Quantitative comparison to published single-wheel experiments (Wong
+textbook ch. 4, with Ding 2011 / Iizuka & Kubota 2011 as optional
+extensions) lands in Week 13 (Phase 4) once the validation CSVs are
+digitized; see ``data/validation/README.md`` and project_plan.md §6
+Phase 4.
 """
 
 from __future__ import annotations
@@ -270,7 +272,7 @@ def test_single_wheel_forces_runs_under_one_millisecond(
 
 
 # ---------------------------------------------------------------------------
-# Placeholder for Wong-textbook worked-example comparison (Week 5 / Week 9)
+# Placeholder for Wong-textbook worked-example comparison (Week 13, Phase 4)
 # ---------------------------------------------------------------------------
 
 

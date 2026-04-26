@@ -28,18 +28,36 @@ Integration notes
   (:mod:`roverdevkit.power.thermal`) rather than a per-step check --
   the lumped-parameter model is steady-state.
 
-Performance
+Performance (post-W7.7 lift-out, project_log.md 2026-04-26 entry)
 -----------
 Default ``dt_s = 3600`` (1 hour) gives ~340 steps for a 14-day mission
-and ~720 steps for a 30-day mission. Per-step cost is dominated by one
-Brent-method slip solve with ~20 inner Bekker-Wong integrations at
-0.3 ms each -> ~6 ms/step. A 14-day mission runs in ~2 s on the
-analytical path, comfortably under the 50 ms target at ``dt_s = 1 day``
-and within the 10 s budget for per-scenario debugging.
+and ~720 steps for a 30-day mission. The Bekker-Wong slip solve and the
+mobility-power calculation are **loop-invariant** under the current
+flat-slope / fixed-soil scenario schema (their inputs do not change
+across mission steps), so they are computed once *before* the time
+loop and reused. Per-step cost in the time loop is therefore dominated
+by the cheap solar / battery / kinematic update.
+
+End-to-end mission cost on Apple Silicon (single core):
+
+* analytical path (BW only):                   ~30 ms / mission
+* analytical + wheel-level SCM correction:     ~40 ms / mission
+* SCM-direct (PyChrono in the wheel-force solve, available via the
+  ``force_backend="scm"`` switch for validation only):  ~4 s / mission
+
+The 100× gap between BW + correction and SCM-direct, with W7.7 showing
+≥99 % feasibility-flip agreement, is the cost-vs-fidelity result that
+makes the wheel-level correction architecture the production choice.
+
+Future scenario schemas that vary slope or soil per mission step will
+need to move the lifted-out calls back inside the loop; the
+``force_backend`` / ``correction`` plumbing is already structured for
+that.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 
@@ -63,6 +81,33 @@ from roverdevkit.terramechanics.bekker_wong import (
     WheelGeometry,
     single_wheel_forces,
 )
+from roverdevkit.terramechanics.correction_model import (
+    FEATURE_COLUMNS as _CORR_FEATURE_COLUMNS,
+)
+from roverdevkit.terramechanics.correction_model import (
+    WheelLevelCorrection,
+)
+
+# Index of the slip feature in the wheel-level correction's feature
+# vector. Cached so the per-step brentq residual can mutate just one
+# entry of a pre-built feature buffer instead of rebuilding the whole
+# vector each call. If the schema ever changes this assert will fail
+# loudly at import time rather than silently corrupting predictions.
+_CORR_SLIP_IDX: int = _CORR_FEATURE_COLUMNS.index("slip")
+assert _CORR_FEATURE_COLUMNS == (
+    "vertical_load_n",
+    "slip",
+    "wheel_radius_m",
+    "wheel_width_m",
+    "grouser_height_m",
+    "grouser_count",
+    "soil_n",
+    "soil_k_c",
+    "soil_k_phi",
+    "soil_cohesion_kpa",
+    "soil_friction_angle_deg",
+    "soil_shear_modulus_k_m",
+), "correction-model feature schema changed; update _build_feature_buffer in traverse_sim.py"
 
 DEFAULT_MOTOR_EFFICIENCY: float = 0.8
 """Electrical-to-mechanical drivetrain efficiency (motor + gearbox).
@@ -147,22 +192,107 @@ def _load_per_wheel_n(
     return total_mass_kg * gravity_m_per_s2 * math.cos(theta) / n_wheels
 
 
+def _build_corr_feature_buffer(
+    wheel: WheelGeometry,
+    soil: SoilParameters,
+    load_per_wheel_n: float,
+) -> NDArray[np.float64]:
+    """Pre-allocate the 12-d wheel-level feature buffer for one step.
+
+    Order **must** match
+    :data:`roverdevkit.terramechanics.correction_model.FEATURE_COLUMNS`
+    (asserted at module import). Slip is left at 0.0 here; the brentq
+    residual mutates ``buf[_CORR_SLIP_IDX]`` per call so each correction
+    prediction only re-indexes one column instead of rebuilding the
+    whole vector.
+    """
+    buf = np.empty(len(_CORR_FEATURE_COLUMNS), dtype=np.float64)
+    buf[0] = load_per_wheel_n
+    buf[1] = 0.0  # slip — overwritten per residual call
+    buf[2] = wheel.radius_m
+    buf[3] = wheel.width_m
+    buf[4] = wheel.grouser_height_m
+    buf[5] = float(wheel.grouser_count)
+    buf[6] = soil.n
+    buf[7] = soil.k_c
+    buf[8] = soil.k_phi
+    buf[9] = soil.cohesion_kpa
+    buf[10] = soil.friction_angle_deg
+    buf[11] = soil.shear_modulus_k_m
+    return buf
+
+
+def _corrected_wheel_forces(
+    wheel: WheelGeometry,
+    soil: SoilParameters,
+    load_per_wheel_n: float,
+    slip: float,
+    correction: WheelLevelCorrection | None,
+    feature_buffer: NDArray[np.float64] | None,
+) -> WheelForces:
+    """Bekker-Wong forces, optionally augmented by the SCM correction.
+
+    When ``correction is None`` returns the BW result with no overhead
+    (this is the production analytical path). When a correction is
+    provided, predicts ``(Δ DP, Δ τ, Δ sinkage)`` from the wheel-level
+    feature buffer and adds them to the BW outputs. Sinkage is clipped
+    at zero — BW + correction can occasionally go slightly negative
+    near low-load / smooth-tire operating points and a non-physical
+    negative sinkage would propagate confusingly into the traverse log.
+    Slip is invariant: the correction lives in force-space at a given
+    operating point, not slip-space.
+    """
+    bw = single_wheel_forces(wheel, soil, load_per_wheel_n, slip)
+    if correction is None:
+        return bw
+
+    if feature_buffer is None:
+        feature_buffer = _build_corr_feature_buffer(wheel, soil, load_per_wheel_n)
+    feature_buffer[_CORR_SLIP_IDX] = slip
+    deltas = correction.predict_array(feature_buffer)[0]
+    # Use dataclasses.replace so any non-corrected WheelForces fields
+    # (rolling_resistance_n, entry_angle_rad, …) are preserved verbatim
+    # without us having to know the full schema here.
+    return dataclasses.replace(
+        bw,
+        drawbar_pull_n=bw.drawbar_pull_n + float(deltas[0]),
+        driving_torque_nm=bw.driving_torque_nm + float(deltas[1]),
+        sinkage_m=max(0.0, bw.sinkage_m + float(deltas[2])),
+    )
+
+
 def _solve_step_wheel_forces(
     wheel: WheelGeometry,
     soil: SoilParameters,
     load_per_wheel_n: float,
     required_dp_per_wheel_n: float,
+    *,
+    correction: WheelLevelCorrection | None = None,
 ) -> tuple[WheelForces, bool]:
     """Find the slip that balances DP(s) = required; return (forces, stalled).
 
-    If no slip in the bracket achieves the required DP (e.g. slope too
-    steep for this wheel-soil combo) we pin slip at the upper bracket
-    and flag ``stalled = True`` so the caller can zero forward velocity.
+    With ``correction is None`` this is pure Bekker-Wong; with a
+    correction, the slip-balance equilibrium is solved against
+    ``DP_BW(s) + ΔDP(s) − DP_required = 0`` so the resulting slip
+    reflects corrected mobility (the §6 W7 plan calls this "injection
+    point 1"; the corrected torque it returns is "injection point 2"
+    once it propagates into ``_mobility_power_w``).
+
+    If no slip in the bracket achieves the required corrected DP (e.g.
+    slope too steep for this wheel-soil-correction combo) we pin slip
+    at the upper bracket and flag ``stalled = True``.
     """
+    feature_buffer = (
+        _build_corr_feature_buffer(wheel, soil, load_per_wheel_n)
+        if correction is not None
+        else None
+    )
 
     def residual(slip: float) -> float:
         return (
-            single_wheel_forces(wheel, soil, load_per_wheel_n, slip).drawbar_pull_n
+            _corrected_wheel_forces(
+                wheel, soil, load_per_wheel_n, slip, correction, feature_buffer
+            ).drawbar_pull_n
             - required_dp_per_wheel_n
         )
 
@@ -170,20 +300,65 @@ def _solve_step_wheel_forces(
     r_high = residual(_SLIP_UPPER_BOUND)
 
     if r_low > 0.0 and r_high > 0.0:
-        # Rover has surplus DP even at the lowest slip -- happens on
-        # downhill or flat near-zero-load situations. Operate at the
-        # lower bracket (smallest slip magnitude that makes the inner
-        # solver happy).
-        forces = single_wheel_forces(wheel, soil, load_per_wheel_n, 0.0)
+        # Surplus DP even at the lowest slip; operate at slip = 0.
+        forces = _corrected_wheel_forces(
+            wheel, soil, load_per_wheel_n, 0.0, correction, feature_buffer
+        )
         return forces, False
     if r_low < 0.0 and r_high < 0.0:
-        # Even at max slip we can't deliver the required DP -> stalled.
-        forces = single_wheel_forces(wheel, soil, load_per_wheel_n, _SLIP_UPPER_BOUND)
+        # Even at max slip we can't deliver required DP → stalled.
+        forces = _corrected_wheel_forces(
+            wheel, soil, load_per_wheel_n, _SLIP_UPPER_BOUND, correction, feature_buffer
+        )
         return forces, True
 
     slip = float(brentq(residual, _SLIP_LOWER_BOUND, _SLIP_UPPER_BOUND, xtol=1e-4))
-    forces = single_wheel_forces(wheel, soil, load_per_wheel_n, slip)
+    forces = _corrected_wheel_forces(
+        wheel, soil, load_per_wheel_n, slip, correction, feature_buffer
+    )
     return forces, False
+
+
+def _scm_solve_step_wheel_forces(
+    wheel: WheelGeometry,
+    soil: SoilParameters,
+    load_per_wheel_n: float,
+    required_dp_per_wheel_n: float,
+) -> tuple[WheelForces, bool]:
+    """SCM-direct counterpart of :func:`_solve_step_wheel_forces`.
+
+    Solves the same slip-balance equation, but evaluates drawbar pull
+    via the PyChrono SCM single-wheel driver instead of Bekker-Wong.
+    Used by the Week-7.7 bake-off (BW vs BW+correction vs SCM-direct)
+    and by the SCM-direct backend in :func:`run_traverse`.
+
+    The PyChrono import is deferred so the analytical path never pays
+    the ~350 ms OpenMP preload cost. Brentq is run at a coarser
+    tolerance (``xtol=2e-3``) than the BW/BW+correction path because
+    each residual evaluation costs ~0.1 s of physics simulation; the
+    bracket [-0.9, 0.95] gives ~9-12 evaluations rather than ~17.
+    """
+    from roverdevkit.terramechanics.pychrono_scm import single_wheel_forces_scm
+
+    def residual(slip: float) -> float:
+        return (
+            single_wheel_forces_scm(wheel, soil, load_per_wheel_n, slip).drawbar_pull_n
+            - required_dp_per_wheel_n
+        )
+
+    r_low = residual(_SLIP_LOWER_BOUND)
+    r_high = residual(_SLIP_UPPER_BOUND)
+
+    if r_low > 0.0 and r_high > 0.0:
+        return single_wheel_forces_scm(wheel, soil, load_per_wheel_n, 0.0), False
+    if r_low < 0.0 and r_high < 0.0:
+        return (
+            single_wheel_forces_scm(wheel, soil, load_per_wheel_n, _SLIP_UPPER_BOUND),
+            True,
+        )
+
+    slip = float(brentq(residual, _SLIP_LOWER_BOUND, _SLIP_UPPER_BOUND, xtol=2e-3))
+    return single_wheel_forces_scm(wheel, soil, load_per_wheel_n, slip), False
 
 
 def _mobility_power_w(
@@ -234,6 +409,8 @@ def run_traverse(
     gravity_m_per_s2: float = 1.625,
     declination_deg: float = 0.0,
     noon_hour_offset: float = LUNAR_SYNODIC_DAY_HOURS / 4.0,
+    correction: WheelLevelCorrection | None = None,
+    force_backend: str = "bw",
 ) -> TraverseLog:
     """March the rover through the scenario and return a full traverse log.
 
@@ -265,7 +442,23 @@ def run_traverse(
         Surface gravity (default lunar).
     declination_deg, noon_hour_offset
         Sun geometry controls; see :mod:`roverdevkit.power.solar`.
+    correction
+        Optional wheel-level SCM correction artifact. When provided
+        (and ``force_backend != "scm"``), BW outputs are augmented by
+        ``correction.predict_array(...)`` at the slip-balance solve.
+        ``None`` (default) preserves the analytical BW-only path.
+    force_backend
+        Wheel-level force backend selector for the Week-7.7 bake-off:
+        ``"bw"`` (default) uses Bekker-Wong, optionally augmented by
+        ``correction``; ``"scm"`` calls the PyChrono SCM single-wheel
+        driver directly inside the slip solve. ``"scm"`` ignores
+        ``correction``. The wheel-force solve is loop-invariant in the
+        current scenario schema and is computed once per mission, so
+        the SCM-direct path costs ~1-3 s/mission rather than the
+        ~10 minutes a per-step solve would take.
     """
+    if force_backend not in {"bw", "scm"}:
+        raise ValueError(f"force_backend must be 'bw' or 'scm', got {force_backend!r}")
     wheel = WheelGeometry(
         radius_m=design.wheel_radius_m,
         width_m=design.wheel_width_m,
@@ -300,16 +493,44 @@ def run_traverse(
     elev_arr = np.zeros(n_steps)
 
     reached_distance = False
-    rover_stalled_once = False
     battery_floored_once = False
     position = 0.0
     soc_arr[0] = battery.state_of_charge
+
+    # Per-mission constants (lifted from the inner loop because every
+    # input to _solve_step_wheel_forces and _mobility_power_w is
+    # loop-invariant in the current scenario schema: wheel/soil/mass/
+    # max_slope_deg are per-mission, not per-position. The inner loop
+    # below only updates the time-variant state — sun geometry, solar
+    # power, battery SOC, and rover position. If a future schema adds a
+    # per-position slope or per-segment soil profile, this lift will
+    # need to be reverted (or made conditional on the new fields).
+    if force_backend == "scm":
+        forces, stalled = _scm_solve_step_wheel_forces(
+            wheel, soil, load_per_wheel, required_dp_per_wheel
+        )
+    else:
+        forces, stalled = _solve_step_wheel_forces(
+            wheel, soil, load_per_wheel, required_dp_per_wheel, correction=correction
+        )
+    p_drive = _mobility_power_w(
+        forces,
+        design.nominal_speed_mps,
+        design.wheel_radius_m,
+        design.n_wheels,
+        motor_efficiency,
+        stalled,
+    )
+    effective_mobility_w = design.drive_duty_cycle * p_drive
+    dx_per_step = 0.0 if stalled else design.nominal_speed_mps * dt_s * design.drive_duty_cycle
+    rover_stalled_once = stalled
 
     for k in range(1, n_steps):
         t_s = t_arr[k]
         t_hours = t_s / 3600.0
 
-        # Solar power in: solar geom at this instant.
+        # Solar power in: solar geom at this instant (the only
+        # per-step physics call still inside the loop).
         hour_angle = lunar_hour_angle_deg(t_hours, noon_hour=noon_hour_offset)
         elev = sun_elevation_deg(scenario.latitude_deg, hour_angle, declination_deg=declination_deg)
         if panel_tilt_deg == 0.0:
@@ -328,27 +549,8 @@ def run_traverse(
             dust_degradation_factor=panel_dust_factor,
         )
 
-        # Traverse this step (duty-cycle-averaged mobility).
-        forces, stalled = _solve_step_wheel_forces(
-            wheel, soil, load_per_wheel, required_dp_per_wheel
-        )
-        rover_stalled_once = rover_stalled_once or stalled
-
-        p_drive = _mobility_power_w(
-            forces,
-            design.nominal_speed_mps,
-            design.wheel_radius_m,
-            design.n_wheels,
-            motor_efficiency,
-            stalled,
-        )
-        # Duty-cycle-average across the step. Rover spends fraction
-        # delta driving and the remainder parked / housekeeping.
-        effective_mobility_w = design.drive_duty_cycle * p_drive
-
-        # Forward progress for the step.
-        dx = design.nominal_speed_mps * dt_s * design.drive_duty_cycle if not stalled else 0.0
-        # Cap at the traverse-distance budget.
+        # Forward progress for the step (uses the lifted dx_per_step).
+        dx = dx_per_step
         remaining = scenario.traverse_distance_m - position
         if dx >= remaining:
             dx = max(0.0, remaining)
@@ -358,15 +560,10 @@ def run_traverse(
         # Power balance and battery update.
         p_load = design.avionics_power_w + effective_mobility_w
         p_net = p_solar - p_load
-        soc_before = battery.state_of_charge
         battery = battery_step(battery, p_net, dt_s)
         if battery.state_of_charge <= battery.min_state_of_charge + 1e-9 and p_net < 0.0:
             battery_floored_once = True
-            # Silently cap: the cap is already applied inside battery.step.
-            # We record the event via the flag.
-            _ = soc_before  # diagnostic anchor for future instrumentation
 
-        t_arr[k] = t_s
         pos_arr[k] = position
         soc_arr[k] = battery.state_of_charge
         power_in_arr[k] = p_solar

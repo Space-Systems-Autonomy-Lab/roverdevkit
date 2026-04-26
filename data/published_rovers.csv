@@ -1,5 +1,4 @@
 rover_name,agency,launch_year,class,mass_total_kg,mass_chassis_kg,n_wheels,wheel_radius_m,wheel_width_m,grouser_height_m,grouser_count,wheelbase_m,solar_area_m2,battery_capacity_wh,avionics_power_w,nominal_speed_mps,mission_latitude_deg,planned_traverse_m,citation,notes
-Sojourner,NASA,1996,mars_micro,10.6,,6,0.065,0.08,0.01,,0.28,0.22,,,,,100,"Wilcox & Nguyen 1998, IEEE Aerospace",Mars — included for MER fitting only; gravity-scaled.
 Lunokhod-1,USSR,1970,lunar_large,756,,8,0.255,0.2,,,1.6,,,,0.55,38.3,,"Kemurjian 1992; Heiken et al. 1991",Included as an upper-bound reference point only.
 Yutu-1,CNSA,2013,lunar_medium,140,,6,0.15,0.15,,,,,120,,,44.1,,"Jia et al. 2018, Acta Astronautica",
 Yutu-2,CNSA,2019,lunar_medium,135,,6,0.15,0.15,,,,,,,,45.5,,"Di et al. 2020, Icarus",Apollo-17-mare-like terrain reference.

@@ -13,17 +13,26 @@ Outputs (under ``--out-dir``):
 - ``acceptance_gate.csv`` — one row per ``(algorithm, target)`` with
   the plan's threshold, observed value, and pass/fail.
 - ``registry_sanity.csv`` — predictions for Pragyan / Yutu-2 /
-  Sojourner vs. the deterministic evaluator (Layer-1 truth).
+  MoonRanger / Rashid-1 vs. the deterministic evaluator (Layer-1 truth).
+  Pragyan and Yutu-2 are flown rovers; MoonRanger and Rashid-1 are
+  design-target lunar micro-rovers (never deployed) included for
+  Layer-1 OOD coverage of the surrogate's input space.
+  Each row carries an ``is_primary`` flag. ``True`` rows
+  (``total_mass_kg``, ``slope_capability_deg``, ``motor_torque_ok``)
+  are the design-axis Layer-1 acceptance set; ``False`` rows
+  (``range_km``, ``energy_margin_raw_pct``) are scenario-OOD
+  diagnostics — see ``roverdevkit.surrogate.baselines``
+  ``LAYER1_PRIMARY_TARGETS`` / ``LAYER1_DIAGNOSTIC_TARGETS``.
 - ``fit_seconds.csv`` — per-fit wall-clock for the writeup.
 
 Examples
 --------
 ::
 
-    # Full 40k v1 acceptance run
+    # Full 40k v4 acceptance run (current canonical dataset, BW + SCM correction)
     python scripts/run_baselines.py \\
-        --dataset data/analytical/lhs_v1.parquet \\
-        --out-dir reports/week6_baselines_v1
+        --dataset data/analytical/lhs_v4.parquet \\
+        --out-dir reports/week8_baselines_v4
 
     # Fast pilot smoke (skip MLP, smaller forest)
     python scripts/run_baselines.py \\
@@ -49,6 +58,7 @@ from roverdevkit.surrogate.baselines import (
     predict_for_registry_rovers,
 )
 from roverdevkit.surrogate.dataset import read_parquet
+from roverdevkit.surrogate.features import FEASIBILITY_COLUMN
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -204,21 +214,83 @@ def main(argv: list[str] | None = None) -> int:
             sanity_path = args.out_dir / "registry_sanity.csv"
             sanity.to_csv(sanity_path, index=False)
             log.info("wrote %s (%d rows)", sanity_path, len(sanity))
-            # Compact view: per-rover R²-like sanity (median |abs_error| across algos)
-            print("\n=== Registry-rover Layer-1 sanity ===", flush=True)
-            summary = (
-                sanity.assign(abs_pct=lambda d: 100 * d["rel_error"].abs())
-                .groupby(["rover", "target"])["abs_pct"]
-                .median()
-                .unstack("target")
-            )
-            with pd.option_context("display.max_columns", None, "display.width", 160):
-                print("Median |relative error| (%) across algorithms:")
-                print(summary.round(2).to_string())
+            _print_registry_sanity_summary(sanity)
         except Exception as exc:  # pragma: no cover — diagnostic, not fatal
             log.warning("registry-rover sanity check failed: %s", exc)
 
     return 0
+
+
+def _print_registry_sanity_summary(sanity: pd.DataFrame) -> None:
+    """Print Layer-1 sanity in two tables: design-axis primary + scenario-OOD diagnostic.
+
+    See ``roverdevkit.surrogate.baselines.LAYER1_PRIMARY_TARGETS`` for
+    the rationale for the split. Range / energy_margin live in the
+    diagnostic block because the registry's published mission distances
+    are 100-1000x smaller than the LHS family budgets, which is a
+    *scenario*-OOD effect rather than a surrogate-calibration failure.
+    """
+    primary = sanity[sanity["is_primary"]].copy()
+    diagnostic = sanity[~sanity["is_primary"]].copy()
+
+    print(
+        "\n=== Registry-rover Layer-1 sanity (PRIMARY: design-axis targets) ===",
+        flush=True,
+    )
+    print(
+        "Acceptance set: total_mass_kg, slope_capability_deg, motor_torque_ok.",
+        flush=True,
+    )
+
+    regressor_primary = primary[primary["target"] != FEASIBILITY_COLUMN]
+    if not regressor_primary.empty:
+        primary_summary = (
+            regressor_primary.assign(abs_pct=lambda d: 100 * d["rel_error"].abs())
+            .groupby(["rover", "target"])["abs_pct"]
+            .median()
+            .unstack("target")
+        )
+        with pd.option_context("display.max_columns", None, "display.width", 160):
+            print("Median |relative error| (%) across algorithms (regression):")
+            print(primary_summary.round(2).to_string())
+
+    classifier_primary = primary[primary["target"] == FEASIBILITY_COLUMN]
+    if not classifier_primary.empty:
+        clf_summary = (
+            classifier_primary.assign(
+                hit=lambda d: (d["predicted"] >= 0.5).astype(int) == d["evaluator"].astype(int)
+            )
+            .groupby("rover")["hit"]
+            .mean()
+            .rename("classifier_accuracy")
+            .to_frame()
+        )
+        with pd.option_context("display.max_columns", None, "display.width", 160):
+            print("\nClassifier accuracy across algorithms (motor_torque_ok):")
+            print(clf_summary.round(3).to_string())
+
+    print(
+        "\n=== Registry-rover Layer-1 diagnostic (SCENARIO-OOD; not part of acceptance) ===",
+        flush=True,
+    )
+    print(
+        "These targets are reported for transparency only. The registry's "
+        "published mission\ndistances are 100-1000x smaller than the LHS "
+        "family budgets, so the relative errors\nbelow reflect that scale "
+        "mismatch rather than physical model accuracy. See SCHEMA.md "
+        "v4 entry.",
+        flush=True,
+    )
+    if not diagnostic.empty:
+        diagnostic_summary = (
+            diagnostic.assign(abs_pct=lambda d: 100 * d["rel_error"].abs())
+            .groupby(["rover", "target"])["abs_pct"]
+            .median()
+            .unstack("target")
+        )
+        with pd.option_context("display.max_columns", None, "display.width", 160):
+            print("Median |relative error| (%) across algorithms:")
+            print(diagnostic_summary.round(2).to_string())
 
 
 if __name__ == "__main__":

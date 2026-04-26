@@ -1,9 +1,13 @@
 """Top-level mission evaluator.
 
-This is the **primary artifact** of the project (project_plan.md §2). The
-surrogate layer is a fast approximation of this function; the tradespace
-and validation layers consume its outputs. Every ML claim in the paper is
-grounded in what this function computes.
+This is the **primary artifact** of the project (project_plan.md §2). After
+the W7.7 traverse-loop lift-out it runs in ~40 ms / mission with the
+wheel-level SCM correction enabled (~30 ms BW-only); the
+:mod:`roverdevkit.surrogate` layer is an *optional* acceleration and
+uncertainty layer used for NSGA-II inner loops, batch sensitivity studies,
+and prediction-interval calibration. Most Phase-3 workflows can run against
+this evaluator directly. Every ML claim in the paper is grounded in what
+this function computes.
 
 Capability envelope vs operational utilisation
 ----------------------------------------------
@@ -76,6 +80,11 @@ from roverdevkit.power.thermal import (
 )
 from roverdevkit.schema import DesignVector, MissionMetrics, MissionScenario
 from roverdevkit.terramechanics.bekker_wong import SoilParameters, WheelGeometry
+from roverdevkit.terramechanics.correction_model import (
+    DEFAULT_CORRECTION_PATH,
+    WheelLevelCorrection,
+    load_correction_or_none,
+)
 from roverdevkit.terramechanics.soils import get_soil_parameters
 
 
@@ -170,6 +179,8 @@ def evaluate_verbose(
     gravity_m_per_s2: float | None = None,
     soil_override: SoilParameters | None = None,
     use_scm_correction: bool = False,
+    correction: WheelLevelCorrection | None = None,
+    force_backend: str = "bw",
 ) -> DetailedEvaluation:
     """Full evaluator: headline metrics plus traverse log and mass breakdown.
 
@@ -191,7 +202,9 @@ def evaluate_verbose(
         default enclosure is built from a fraction of the chassis using
         :func:`default_architecture_for_design`.
     gravity_m_per_s2
-        Surface gravity override (e.g. Mars for Sojourner validation).
+        Surface gravity override (e.g. for off-Moon test scenarios).
+        All current registry rovers run at lunar gravity since the
+        Mars-gravity Sojourner sentinel was removed (2026-04-25).
     soil_override
         Optional :class:`SoilParameters` to use instead of the
         catalogue lookup on ``scenario.soil_simulant``. The Phase-2
@@ -200,10 +213,29 @@ def evaluate_verbose(
         mapping instead of a four-category one
         (``project_plan.md`` §6).
     use_scm_correction
-        Reserved for Week 7; raises :class:`NotImplementedError`.
+        When ``True`` and ``correction`` is ``None``, loads the
+        production wheel-level correction artifact from
+        :data:`roverdevkit.terramechanics.correction_model.DEFAULT_CORRECTION_PATH`
+        and falls back to the BW-only path with a one-time ``UserWarning``
+        if the file is missing (e.g. during the dataset rebuild that
+        produces the artifact in the first place). Ignored when
+        ``correction`` is not ``None`` so callers can pre-load once and
+        opt in per-call without flipping a separate flag.
+    correction
+        Pre-loaded
+        :class:`roverdevkit.terramechanics.correction_model.WheelLevelCorrection`.
+        Allows the LHS dataset builder to load the artifact once and
+        share it across worker processes / repeated calls instead of
+        joblib-loading on every evaluate.
+    force_backend
+        Wheel-level force backend (``"bw"`` default or ``"scm"`` for
+        the Week-7.7 bake-off — runs PyChrono SCM directly inside the
+        slip solve). ``"scm"`` ignores ``correction`` /
+        ``use_scm_correction`` since SCM-direct is the ground truth
+        the correction tries to approximate.
     """
-    if use_scm_correction:
-        raise NotImplementedError("SCM correction path is wired in Week 7 (project_plan.md §6).")
+    if correction is None and use_scm_correction and force_backend != "scm":
+        correction = load_correction_or_none(DEFAULT_CORRECTION_PATH, on_missing="warn")
 
     mass_params = mass_params or MassModelParams()
     if gravity_m_per_s2 is not None and not math.isclose(
@@ -252,6 +284,8 @@ def evaluate_verbose(
         soil,
         total_mass_kg=total_mass_kg,
         gravity_m_per_s2=active_g,
+        correction=correction,
+        force_backend=force_backend,
     )
 
     range_km = float(log.position_m[-1]) / 1000.0
@@ -302,6 +336,8 @@ def evaluate(
     gravity_m_per_s2: float | None = None,
     soil_override: SoilParameters | None = None,
     use_scm_correction: bool = False,
+    correction: WheelLevelCorrection | None = None,
+    force_backend: str = "bw",
 ) -> MissionMetrics:
     """Run the full mission evaluator on one design in one scenario.
 
@@ -319,6 +355,8 @@ def evaluate(
         gravity_m_per_s2=gravity_m_per_s2,
         soil_override=soil_override,
         use_scm_correction=use_scm_correction,
+        correction=correction,
+        force_backend=force_backend,
     ).metrics
 
 

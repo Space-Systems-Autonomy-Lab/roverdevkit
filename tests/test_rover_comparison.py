@@ -31,7 +31,7 @@ from roverdevkit.validation.rover_comparison import (
     compare_all,
 )
 from roverdevkit.validation.rover_registry import (
-    registry,
+    flown_registry,
     registry_by_name,
     truth_by_rover,
 )
@@ -39,7 +39,12 @@ from roverdevkit.validation.rover_registry import (
 # Local copy used by the @parametrize decorator. Resolving this at
 # import time (rather than via the session-scoped fixture) is necessary
 # because parametrize evaluates before fixtures run.
-REGISTERED_ROVERS = [e.rover_name for e in registry()]
+#
+# Layer-0 truth comparison uses the *flown* subset of the registry —
+# design-target rovers (MoonRanger, Rashid-1) have no published flight
+# data and only participate in the Layer-1 surrogate sanity check
+# (Week 6).
+REGISTERED_ROVERS = [e.rover_name for e in flown_registry()]
 
 
 # ---------------------------------------------------------------------------
@@ -212,8 +217,8 @@ def test_polar_latitude_reduces_peak_solar_power() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_every_registered_rover_has_a_truth_row() -> None:
-    for entry in registry():
+def test_every_flown_rover_has_a_truth_row() -> None:
+    for entry in flown_registry():
         truth = truth_by_rover(entry.rover_name)
         assert truth.rover_name == entry.rover_name
         assert truth.scenario_name == entry.scenario.name
@@ -221,7 +226,7 @@ def test_every_registered_rover_has_a_truth_row() -> None:
 
 def test_published_traverse_bands_are_valid() -> None:
     """Low <= published <= high for every row."""
-    for entry in registry():
+    for entry in flown_registry():
         t = truth_by_rover(entry.rover_name)
         assert t.traverse_m_low <= t.traverse_m_published <= t.traverse_m_high
         assert (

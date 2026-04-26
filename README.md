@@ -3,10 +3,12 @@
 **ML-Accelerated Co-Design of Mobility and Power Subsystems for Lunar Micro-Rovers**
 
 RoverDevKit is an open-source, mission-level rover evaluator that chains
-terramechanics, solar power, and traverse simulation models, trains an ML
-surrogate over the coupled wheel–chassis–power design space, and uses it to
-explore mission-relevant Pareto fronts validated against the published design
-points of real lunar micro-rovers (Rashid, Pragyan, Yutu-class).
+terramechanics, solar power, and traverse simulation models, lifts the
+analytical Bekker-Wong wheel forces to higher fidelity through a learned
+wheel-level correction trained against PyChrono SCM, and uses the corrected
+evaluator (plus an optional mission-level surrogate for batch / UQ workflows)
+to explore mission-relevant Pareto fronts validated against the published
+design points of real lunar micro-rovers (Rashid, Pragyan, Yutu-class).
 
 This repository is a semester research project at MARSlab, Duke University.
 
@@ -21,22 +23,36 @@ research framing.
 1. An open-source, fully-documented mission evaluator for lunar micro-rovers
    that takes a design vector and a mission profile and returns mission-level
    performance metrics (traverse range, energy margin, slope capability, mass).
-2. A multi-fidelity ML surrogate over the coupled mobility–power design space
-   that enables interactive tradespace exploration at millisecond latency.
-3. Validation that the optimizer rediscovers the design points of real lunar
+   Post-W7.7 the corrected evaluator runs in ~40 ms / mission on a single core.
+2. A **wheel-level multi-fidelity correction model**
+   (`roverdevkit.terramechanics.correction_model.WheelLevelCorrection`) that
+   learns the residual between Bekker-Wong analytical wheel forces and PyChrono
+   SCM from a small (~500-row) single-wheel sweep, and composes back into the
+   Bekker-Wong traverse loop at every wheel-force step. This is the
+   methodological centrepiece — it is what makes the evaluator multi-fidelity
+   without ever running SCM in the inner loop.
+3. An optional mission-level XGBoost / MLP surrogate over the corrected
+   evaluator that serves as an inner-loop accelerator for NSGA-II, the home for
+   calibrated 90 % prediction intervals (quantile XGBoost), and the reference
+   baseline for the post-semester benchmark release.
+4. Validation that the optimizer rediscovers the design points of real lunar
    micro-rovers within stated tolerances when given matching mission
    constraints, plus SHAP-based interpretable design rules.
 
 ## Architecture
 
 ```
-Design Vector → Mission Evaluator (physics) → Mission Metrics
-                         │
-                         ▼
-                 ML Surrogate (fast)
-                         │
-                         ▼
-          Tradespace: sweeps · NSGA-II · SHAP
+Design Vector → Mission Evaluator (BW + wheel-level SCM correction)
+                              │              ~40 ms / mission
+                              ▼
+              Mission Metrics (range, energy, slope, mass)
+                              │
+                              ▼
+            Optional surrogate layer (XGBoost / MLP + quantile heads)
+                              │  used for: NSGA-II inner loop, batch UQ
+                              ▼
+                Tradespace: sweeps · NSGA-II · SHAP
+                (evaluator-direct for ≤10k points; surrogate above)
 ```
 
 See [`project_plan.md` §2](project_plan.md) for the full system diagram and

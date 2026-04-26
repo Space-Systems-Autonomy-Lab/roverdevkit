@@ -3,8 +3,9 @@
 Single-wheel testbed data digitized from published papers. Used **only** to
 validate the evaluator; never used for training the surrogate.
 
-Populate this directory in Weeks 1–2 as the Bekker-Wong model is built and
-in Week 9 as the layered validation is formalized.
+Populate this directory in Week 13 (Phase 4) as the Wong-textbook
+worked-example is digitised for the single-wheel BW Layer-3 validation
+(project_plan.md §6 Phase 4).
 
 ## Target sources
 

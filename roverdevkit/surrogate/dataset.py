@@ -66,9 +66,10 @@ from roverdevkit.surrogate.sampling import LHSSample
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "v2"
-"""Bump when the column schema changes so downstream code can detect
-stale Parquet files. Written into Parquet file-level metadata.
+SCHEMA_VERSION = "v4"
+"""Bump when the column schema or training distribution changes so
+downstream code can detect stale Parquet files. Written into Parquet
+file-level metadata.
 
 History
 -------
@@ -76,9 +77,54 @@ History
   feasibility target.
 - v2 (Week 6 step 2): drop ``thermal_survival`` from the schema; the
   evaluator still computes it but the surrogate does not consume it.
-  See module docstring for the scoping rationale."""
+  See module docstring for the scoping rationale.
+- v3 (Week 6 step 4 follow-up, 2026-04-25): widened LHS bounds on
+  ``wheel_width_m`` (0.15 -> 0.20), ``grouser_height_m`` (0.012 ->
+  0.020), and ``chassis_mass_kg`` (35 -> 50) so the flown / design-
+  target lunar micro-rovers in
+  :mod:`roverdevkit.validation.rover_registry` (Yutu-2, MoonRanger,
+  Rashid-1) sit inside the surrogate's training support rather than
+  at corner points. Column schema is byte-identical to v2; the bump
+  signals the changed training distribution so a v2-trained surrogate
+  isn't silently reused on a v3 dataset.
+- v4 (Week 8 step 1, 2026-04-26): rebuild with the trained wheel-level
+  SCM correction (``use_scm_correction=True``) composed into the
+  analytical evaluator. Column schema is byte-identical to v3; the
+  bump signals the corrected mobility physics so a v3-trained
+  surrogate isn't silently reused on v4 data. Promotion was gated
+  by the Week-7.5 sign-flip gate (``reports/week7_5_gate``) and the
+  Week-7.7 BW-vs-SCM-direct bake-off (``reports/week7_7_bakeoff``)."""
 
 DEFAULT_FIDELITY = "analytical"
+
+
+# ---------------------------------------------------------------------------
+# Per-worker correction cache (loaded once per pool worker, not per sample)
+# ---------------------------------------------------------------------------
+
+_WORKER_USE_SCM_CORRECTION: bool = False
+_WORKER_CORRECTION: Any = None  # WheelLevelCorrection | None, set in _init_worker
+
+
+def _init_worker(use_scm_correction: bool) -> None:
+    """Pool initializer: cache the SCM correction artifact per worker.
+
+    Loaded once per spawned process so each ``_evaluate_sample`` call
+    skips the joblib disk read. Falls back gracefully (warn-once,
+    BW-only) if the artifact is missing — same contract as
+    :func:`evaluate_verbose`.
+    """
+    global _WORKER_USE_SCM_CORRECTION, _WORKER_CORRECTION
+    _WORKER_USE_SCM_CORRECTION = use_scm_correction
+    if use_scm_correction:
+        from roverdevkit.terramechanics.correction_model import (
+            DEFAULT_CORRECTION_PATH,
+            load_correction_or_none,
+        )
+
+        _WORKER_CORRECTION = load_correction_or_none(DEFAULT_CORRECTION_PATH, on_missing="warn")
+    else:
+        _WORKER_CORRECTION = None
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +315,7 @@ def _evaluate_sample(sample: LHSSample) -> dict[str, Any]:
             sample.design,
             sample.scenario,
             soil_override=sample.soil,
+            correction=_WORKER_CORRECTION,
         )
         row.update(_flatten_metrics(result.metrics))
         row.update(_flatten_log_stats(result.log))
@@ -307,6 +354,7 @@ class DatasetMetadata:
     test_frac: float = 0.1
     fidelity: str = DEFAULT_FIDELITY
     evaluator_version: str = "0.1.0"
+    use_scm_correction: bool = False
     built_at_utc: str = field(
         default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds")
     )
@@ -322,6 +370,7 @@ class DatasetMetadata:
             b"test_frac": str(self.test_frac).encode(),
             b"fidelity": self.fidelity.encode(),
             b"evaluator_version": self.evaluator_version.encode(),
+            b"use_scm_correction": str(self.use_scm_correction).encode(),
             b"built_at_utc": self.built_at_utc.encode(),
             b"notes": self.notes.encode(),
         }
@@ -338,6 +387,7 @@ def build_dataset(
     n_workers: int | None = None,
     chunksize: int = 32,
     progress: bool = True,
+    use_scm_correction: bool = False,
 ) -> pd.DataFrame:
     """Evaluate ``samples`` in parallel and return a flattened DataFrame.
 
@@ -373,9 +423,15 @@ def build_dataset(
 
     _iter: Iterable[dict[str, Any]]
     if n_workers == 1:
+        # Serial path: initialise the worker cache in-process once.
+        _init_worker(use_scm_correction)
         _iter = (_evaluate_sample(s) for s in sample_list)
     else:
-        pool = mp.get_context("spawn").Pool(processes=n_workers)
+        pool = mp.get_context("spawn").Pool(
+            processes=n_workers,
+            initializer=_init_worker,
+            initargs=(use_scm_correction,),
+        )
         _iter = pool.imap_unordered(_evaluate_sample, sample_list, chunksize=chunksize)
 
     rows: list[dict[str, Any]] = []

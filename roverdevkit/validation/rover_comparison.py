@@ -52,8 +52,8 @@ from roverdevkit.schema import MissionMetrics
 from roverdevkit.validation.rover_registry import (
     PublishedTruth,
     RoverRegistryEntry,
+    flown_registry,
     load_truth_table,
-    registry,
     truth_by_rover,
 )
 
@@ -131,17 +131,13 @@ def _predicted_peak_solar_power_w(entry: RoverRegistryEntry) -> float:
     time-history arrays. Uses the same panel-physics model the traverse
     sim does (:func:`panel_power_w`) at peak sun elevation.
 
-    For the Sojourner (Mars) case the solar irradiance at 1 AU is
-    scaled by ``(1 AU / 1.524 AU)^2`` to reflect Mars's orbital radius.
+    Lunar-only since the Mars-gravity Sojourner sentinel was removed
+    (project_log.md 2026-04-25). The 1 AU solar constant is the right
+    value for every current registry entry.
     """
     peak_elev = sun_elevation_deg(entry.scenario.latitude_deg, lunar_hour_angle_deg=0.0)
     if peak_elev <= 0.0:
         return 0.0
-
-    irradiance = SOLAR_CONSTANT_AU_1_W_PER_M2
-    if entry.rover_name == "Sojourner":
-        mars_semi_major_au = 1.524
-        irradiance = SOLAR_CONSTANT_AU_1_W_PER_M2 / (mars_semi_major_au**2)
 
     return panel_power_w(
         panel_area_m2=entry.design.solar_area_m2,
@@ -151,7 +147,7 @@ def _predicted_peak_solar_power_w(entry: RoverRegistryEntry) -> float:
         panel_azimuth_deg=180.0,
         sun_azimuth_deg=180.0,
         dust_degradation_factor=entry.panel_dust_factor,
-        solar_constant_w_per_m2=irradiance,
+        solar_constant_w_per_m2=SOLAR_CONSTANT_AU_1_W_PER_M2,
     )
 
 
@@ -223,7 +219,13 @@ def compare_all(
     csv_path: Path | str | None = None,
     range_sanity_ceiling_multiple: float = 10.0,
 ) -> ComparisonSummary:
-    """Run the evaluator on every rover in the registry and aggregate.
+    """Run the evaluator on every flown rover in the registry and aggregate.
+
+    Iterates :func:`flown_registry` rather than :func:`registry` because
+    Layer-0 truth comparison only makes sense for rovers with actual
+    published flight data; design-target entries (MoonRanger, Rashid-1)
+    are skipped here and only participate in the Week-6 Layer-1
+    surrogate sanity check.
 
     Parameters
     ----------
@@ -239,7 +241,7 @@ def compare_all(
             truth=truths[entry.rover_name],
             range_sanity_ceiling_multiple=range_sanity_ceiling_multiple,
         )
-        for entry in registry()
+        for entry in flown_registry()
     )
     n_pass = sum(1 for r in results if r.passes)
     return ComparisonSummary(results=results, n_pass=n_pass, n_total=len(results))

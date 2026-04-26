@@ -1,0 +1,29 @@
+# Validation scenario — Rashid-1 lunar mid-latitude traverse (MBRSC/UAE).
+# Not a canonical tradespace scenario; used only by
+# roverdevkit/validation/rover_registry.py for the design-target
+# Layer-1 surrogate sanity check (rover never deployed — lost on the
+# Hakuto-R Mission 1 lander failure, April 2023).
+#
+# Source: Hurrell et al. 2025, "Traction Performance Evaluation for a
+# Rashid-1 Rover Wheel", Space Science Reviews 221:37
+# (DOI 10.1007/s11214-025-01164-8) for wheel + mass + speed; Els et al.
+# LPSC 2021 #1905 for science payload + dimensions; ESA + Wikipedia
+# Emirates Lunar Mission for landing site (Atlas crater, Mare Frigoris,
+# ~47.0 N, 44.4 E) and 1 lunar-day mission target.
+#
+# Soil simulant FJS-1 chosen explicitly because Hurrell et al. 2025
+# calibrated the Rashid-1 wheel terramechanics against FJS-1 in their
+# DEM single-wheel validation; this is the most defensible simulant
+# for sanity-checking the Rashid surrogate prediction.
+#
+# sun_geometry "diurnal" rather than "polar_intermittent" because the
+# Atlas crater landing site is mid-latitude (47 N), not polar, and the
+# scenario sees a normal day/night terminator pattern.
+name: rashid_atlas_crater
+latitude_deg: 47.0
+traverse_distance_m: 1000.0
+terrain_class: mare_nominal
+soil_simulant: FJS-1
+mission_duration_earth_days: 14.0     # one lunar day (Rashid-1 design target)
+max_slope_deg: 10.0
+sun_geometry: diurnal

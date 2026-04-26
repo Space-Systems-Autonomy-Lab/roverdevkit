@@ -6,19 +6,27 @@ Each row is **one** `(design, scenario, soil)` triple evaluated by
 `roverdevkit.mission.evaluator.evaluate_verbose`, flattened into a
 single Parquet row.
 
-- **Schema version:** `v2` (see `dataset.SCHEMA_VERSION`).
-  - **v2 (current):** removed `thermal_survival` from the metric column set. The system-level evaluator still computes it as a diagnostic but the surrogate does not consume or predict it. Rationale: the current mass model treats RHU power and MLI quality as free, so `thermal_survival` reduces to a near-trivial gate ("did you add an RHU?") with no real design trade-off. The Pragyan/Yutu-2 thermal distinction stays in the Week-5 validation harness. A future mass-model upgrade that charges RHU/MLI mass would let thermal re-enter the schema as a real Pareto target (planned for the SCM-correction work in Phase 3).
+- **Schema version:** `v4` (see `dataset.SCHEMA_VERSION`).
+  - **v4 (current, 2026-04-26):** every row is evaluated with the wheel-level SCM correction (`data/scm/correction_v1.joblib`, `WheelLevelCorrection`) applied inside the analytical traverse loop. The `use_scm_correction` flag is recorded in the Parquet metadata footer. The Parquet column schema is byte-identical to v3; the version bump exists so a v3-trained surrogate (BW-only) isn't silently reused on a v4 dataset (BW + correction). The Week-7.7 bake-off (`reports/week7_7_bakeoff/decision.md`) showed the correction reduces feasibility flips vs SCM-direct from 12-56% to 0-1% per scenario family and shrinks continuous-target error by 5-12 percentage points, while running ~100× faster than SCM-direct. See `project_log.md` 2026-04-26 entries for the W7.5 gate decision and v4 build context.
+  - **v3 (retired, 2026-04-25):** widened LHS bounds on `wheel_width_m` (0.15 → 0.20), `grouser_height_m` (0.012 → 0.020), and `chassis_mass_kg` (35 → 50) so the flown / design-target lunar micro-rovers in `roverdevkit.validation.rover_registry` (Yutu-2 ex-payload mass ~30-40 kg, Rashid-1 grouser 15 mm, Lunokhod-class wheel widths 20 cm) sit inside the surrogate's training support rather than at corner points. The Parquet column schema is byte-identical to v2; the version bump exists so a v2-trained surrogate isn't silently reused on a v3 dataset.
+  - **v2 (retired):** removed `thermal_survival` from the metric column set. The system-level evaluator still computes it as a diagnostic but the surrogate does not consume or predict it. Rationale: the mass model treats RHU power and MLI quality as free, so `thermal_survival` reduces to a near-trivial gate ("did you add an RHU?") with no real design trade-off. The Pragyan/Yutu-2 thermal distinction stays in the Week-5 validation harness. A future mass-model upgrade that charges RHU/MLI mass would let thermal re-enter the schema as a real Pareto target (planned for the SCM-correction work in Phase 3).
   - **v1 (retired):** included `thermal_survival` as a feasibility flag.
 - **Fidelity level (this file):** `analytical` — Bekker-Wong terramechanics
-  path; no SCM correction applied. The Week-7.5 gate (project_plan.md
-  §6) decides whether a composed `analytical + correction` surrogate is
-  shipped or whether SCM is reported as a bounded sensitivity. When
-  composed, the correction surrogate is *added* on top of the row-wise
-  analytical output; no regeneration of this dataset is required.
-- **Canonical filenames:** `lhs_v1.parquet` (main training set, target
-  40k rows at 10k × 4 scenario families), `lhs_pilot.parquet` (smoke-test
-  pilot, typically 2k rows), `challenge_v1.parquet` (~200-row corner
-  case set; Phase-5 benchmark release).
+  path with the wheel-level SCM correction applied row-wise inside
+  `traverse_sim.run_traverse` (per the Week-7.5 gate decision in
+  `reports/week7_5_gate/gate_decision.md`). The composition is row-wise,
+  so the correction *adds* delta drawbar pull / driving torque / sinkage
+  to the BW solve at every wheel-force step within `brentq`. The
+  `use_scm_correction` flag in the Parquet footer records whether this
+  composition was active at build time (always `True` for v4).
+- **Canonical filename:** `lhs_v4.parquet` — current main training set,
+  40k rows at 10k × 4 scenario families on the v3 widened bounds with
+  v4 SCM correction. Pilot (`lhs_pilot.parquet`) and challenge
+  (`challenge_v1.parquet`) files are generated on demand from
+  `scripts/build_dataset.py`; only the canonical training set is
+  treated as a tracked artifact. Earlier versions (`lhs_v1`, `lhs_v2`,
+  `lhs_v3`) are retired; their build context lives in `project_log.md`
+  for historical reproducibility.
 
 Dataset-level metadata is written to the Parquet file's schema footer;
 use `read_parquet_metadata(path)` to recover it (seed, sampler version,
@@ -45,7 +53,7 @@ Prefix conventions:
 | `sample_index` | int64 | Monotonic row id from the sampler. Stable across re-runs with the same seed. |
 | `split` | category | `train` / `val` / `test`, assigned at sample time with a deterministic RNG independent of row ordering. |
 | `stratum_id` | int | `0 = 4-wheel`, `1 = 6-wheel`. Matches `design_n_wheels`. |
-| `fidelity` | category | `analytical` for this file; `scm_corrected` once Week-7 composition is wired. |
+| `fidelity` | category | `analytical` for this file. The `use_scm_correction=True` Parquet-footer flag records that the wheel-level correction was composed in row-wise; no separate `scm_corrected` fidelity tier is shipped. |
 | `status` | category | `ok` if evaluator succeeded, else the exception class name (e.g. `ValueError`). Numeric target columns are NaN on non-`ok` rows; boolean targets are `False`. |
 
 ### Design vector (12 columns)
@@ -55,11 +63,11 @@ All `design_*` columns mirror the `DesignVector` pydantic schema.
 | Column | dtype | Range | Description |
 | --- | --- | --- | --- |
 | `design_wheel_radius_m` | float64 | [0.05, 0.20] | Wheel radius R |
-| `design_wheel_width_m` | float64 | [0.03, 0.15] | Wheel width W |
-| `design_grouser_height_m` | float64 | [0.0, 0.012] | Grouser height |
+| `design_wheel_width_m` | float64 | [0.03, 0.20] | Wheel width W (v3 widened from 0.15) |
+| `design_grouser_height_m` | float64 | [0.0, 0.020] | Grouser height (v3 widened from 0.012) |
 | `design_grouser_count` | int64 | [0, 24] | Number of grousers per wheel |
 | `design_n_wheels` | int64 | {4, 6} | Wheel count |
-| `design_chassis_mass_kg` | float64 | [3.0, 35.0] | Dry chassis mass |
+| `design_chassis_mass_kg` | float64 | [3.0, 50.0] | Dry chassis mass (v3 widened from 35.0) |
 | `design_wheelbase_m` | float64 | [0.3, 1.2] | Wheelbase |
 | `design_solar_area_m2` | float64 | [0.1, 1.5] | Solar array area |
 | `design_battery_capacity_wh` | float64 | [20.0, 500.0] | Usable battery energy |
@@ -142,10 +150,47 @@ Categorical:
   (e.g. `"mission_duration"`, `"evaluator_error"`). Use as a
   post-hoc diagnostic; not suitable as a model input.
 
+## Layer-1 registry sanity scope
+
+`roverdevkit.surrogate.baselines.predict_for_registry_rovers` produces
+a `registry_sanity.csv` artifact with one row per `(rover, algorithm,
+target)` tuple plus an `is_primary` boolean. The split is enforced
+by the `LAYER1_PRIMARY_TARGETS` / `LAYER1_DIAGNOSTIC_TARGETS`
+constants in `roverdevkit/surrogate/baselines.py`:
+
+- **Primary (is_primary=True):** `total_mass_kg`,
+  `slope_capability_deg`, `motor_torque_ok`. Design-axis metrics
+  where the v3 widened bounds put every flown / design-target rover
+  inside the surrogate's training support. Treated as the real
+  Layer-1 acceptance set in `project_plan.md` §6 W6 evaluation.
+- **Diagnostic (is_primary=False):** `range_km`,
+  `energy_margin_raw_pct`. Both are scenario-OOD for the registry:
+  Pragyan ≈ 100 m, Yutu-2 ≈ 25 m / lunar day, MoonRanger and
+  Rashid-1 ≈ 1 km published mission distances against LHS family
+  budgets of 20–80 km (intentionally non-binding so `range_km` stays
+  a continuous training signal). The relative error for these
+  targets is dominated by the absolute-scale mismatch and reflects
+  scenario-OOD rather than a surrogate-calibration failure. Reported
+  for transparency only.
+
+A v4 example (median MAPE across algorithms, `reports/week8_baselines_v4/registry_sanity.csv`):
+
+| rover | `total_mass_kg` | `slope_capability_deg` | `motor_torque_ok` accuracy |
+| --- | ---: | ---: | ---: |
+| Yutu-2 | 0.9 % | 2.1 % | 1.0 |
+| Pragyan | 2.7 % | 60.6 % | 1.0 |
+| MoonRanger | 3.2 % | 25.3 % | 1.0 |
+| Rashid-1 | 8.2 % | 5.7 % | 1.0 |
+
+Slope MAPE on Pragyan and MoonRanger remains elevated relative to mass; v4 closed roughly half the v3 gap (Pragyan 77.9 → 60.6 %, MoonRanger 39.7 → 25.3 %), but published rover slope-capability specs come from real-rover-specific design choices the wheel-level correction's 12-D feature space cannot resolve.
+
 ## Column count sanity
 
 Metadata (5) + design (12) + scenario (15) + metrics (8) + stats (≥24)
-= ≥64 columns at `SCHEMA_VERSION = v2`. v1 had 65 (one more, the
-removed `thermal_survival`). Future versions appending or removing
-columns *must* bump `SCHEMA_VERSION` so downstream code can detect a
-mismatch.
+= ≥64 columns at `SCHEMA_VERSION = v4` (byte-identical to v3 / v2; the
+v4 bump records that wheel-level SCM correction is composed in row-wise
+at build time, not a column change). v1 had 65 (one more, the removed
+`thermal_survival`). Future versions appending,
+removing, or re-binding columns — *or* changing the LHS support so a
+v_n-trained surrogate would be OOD on the v_(n+1) dataset — *must*
+bump `SCHEMA_VERSION` so downstream code can detect a mismatch.

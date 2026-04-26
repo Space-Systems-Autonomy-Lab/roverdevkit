@@ -24,7 +24,7 @@ from roverdevkit.validation.rover_comparison import (
     compare_all,
     compare_one,
 )
-from roverdevkit.validation.rover_registry import registry, registry_by_name
+from roverdevkit.validation.rover_registry import flown_registry, registry_by_name
 
 
 @pytest.fixture
@@ -111,7 +111,7 @@ def rover_compare_results(
 @pytest.fixture(scope="session")
 def registered_rover_names() -> list[str]:
     """Stable list of rover names (the parametrize ids)."""
-    return [e.rover_name for e in registry()]
+    return [e.rover_name for e in flown_registry()]
 
 
 # ``registry_by_name`` and ``compare_one`` are module-level helpers; we

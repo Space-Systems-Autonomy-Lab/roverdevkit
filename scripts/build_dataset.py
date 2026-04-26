@@ -16,12 +16,12 @@ Examples
         --workers 1 \\
         --notes "Week-6 step-2 pilot rebuild under v2."
 
-    # Full 40k training set (auto worker count)
+    # Full 40k training set on the v3 widened bounds (current canonical)
     python scripts/build_dataset.py \\
         --n-per-scenario 10000 \\
-        --out data/analytical/lhs_v1.parquet \\
+        --out data/analytical/lhs_v3.parquet \\
         --seed 42 \\
-        --notes "Week-6 step-3 full LHS run."
+        --notes "v3 widened LHS bounds (chassis 3-50 kg, wheel_width 0.03-0.20 m, grouser 0-0.020 m)."
 
 The script writes a single Parquet file with the schema documented in
 ``data/analytical/SCHEMA.md`` (``SCHEMA_VERSION`` constant in
@@ -113,6 +113,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Disable the tqdm progress bar.",
     )
     p.add_argument(
+        "--use-scm-correction",
+        action="store_true",
+        help=(
+            "Compose the trained wheel-level SCM correction "
+            "(roverdevkit/terramechanics/correction_model.py) into the "
+            "analytical evaluator. Required for v4 / lhs_v4.parquet "
+            "builds; falls back to BW-only with a warning if the "
+            "correction artifact is missing on disk."
+        ),
+    )
+    p.add_argument(
         "--notes",
         type=str,
         default="",
@@ -138,13 +149,15 @@ def main(argv: list[str] | None = None) -> int:
     workers = args.workers if args.workers > 0 else max(1, (os.cpu_count() or 2) - 1)
 
     log.info(
-        "schema=%s n_per_scenario=%d families=%d total_samples=%d workers=%d seed=%d out=%s",
+        "schema=%s n_per_scenario=%d families=%d total_samples=%d workers=%d seed=%d "
+        "use_scm_correction=%s out=%s",
         SCHEMA_VERSION,
         args.n_per_scenario,
         len(args.families),
         args.n_per_scenario * len(args.families),
         workers,
         args.seed,
+        args.use_scm_correction,
         args.out,
     )
 
@@ -164,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         scenario_families=tuple(args.families),
         val_frac=args.val_frac,
         test_frac=args.test_frac,
+        use_scm_correction=args.use_scm_correction,
         notes=args.notes,
     )
 
@@ -177,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             "n_workers": workers,
             "chunksize": args.chunksize,
             "progress": not args.no_progress,
+            "use_scm_correction": args.use_scm_correction,
         },
     )
     elapsed = time.perf_counter() - t0

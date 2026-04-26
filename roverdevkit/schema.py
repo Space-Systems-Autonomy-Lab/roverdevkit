@@ -29,13 +29,44 @@ class DesignVector(BaseModel):
 
     # Mobility
     wheel_radius_m: float = Field(ge=0.05, le=0.20, description="Wheel radius R")
-    wheel_width_m: float = Field(ge=0.03, le=0.15, description="Wheel width W")
-    grouser_height_m: float = Field(ge=0.0, le=0.012, description="Grouser height h_g")
+    wheel_width_m: float = Field(
+        ge=0.03,
+        le=0.20,
+        description=(
+            "Wheel width W. Upper bound 0.20 m covers the heavier "
+            "lunar-class micro-rovers (Yutu-2-class wheels are 0.15 m; "
+            "Lunokhod-class is 0.20 m). Widened from 0.15 in the v3 "
+            "LHS bounds widening to admit more representative validation "
+            "rovers as in-distribution points."
+        ),
+    )
+    grouser_height_m: float = Field(
+        ge=0.0,
+        le=0.020,
+        description=(
+            "Grouser height h_g. Upper bound 20 mm covers published lunar "
+            "micro-rover wheels (Rashid-1 flew 15 mm, Yutu-class wheels "
+            "use ~12 mm). The LHS sampler in surrogate.sampling currently "
+            "draws to 12 mm only; widening it to the schema ceiling is a "
+            "dataset-regen task tracked in the project log."
+        ),
+    )
     grouser_count: int = Field(ge=0, le=24, description="Number of grousers N_g")
     n_wheels: Literal[4, 6] = Field(description="Wheel count N_w")
 
     # Chassis
-    chassis_mass_kg: float = Field(ge=3.0, le=35.0, description="Dry chassis mass m_c")
+    chassis_mass_kg: float = Field(
+        ge=3.0,
+        le=50.0,
+        description=(
+            "Dry chassis mass m_c. Upper bound 50 kg widened from 35 kg "
+            "in the v3 LHS bounds widening so the heavier flown lunar "
+            "micro-rovers (Yutu-class, ~30-40 kg ex-payload) sit inside "
+            "the surrogate's training support rather than at a corner. "
+            "Floor 3 kg keeps the design space anchored to actual "
+            "micro-rover scale."
+        ),
+    )
     wheelbase_m: float = Field(ge=0.3, le=1.2, description="Wheelbase L_wb")
 
     # Power

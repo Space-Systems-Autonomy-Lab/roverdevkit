@@ -1,22 +1,50 @@
-"""Published-rover design vectors and mission scenarios for Week 5.
+"""Published-rover design vectors and mission scenarios.
 
-This module codifies the three rovers we compare the evaluator against
-(project_plan.md §6 W5) as :class:`DesignVector` + :class:`MissionScenario`
-pairs, plus the published truth numbers in
-``data/published_traverse_data.csv``.
+This module codifies the lunar rovers we compare the evaluator and the
+surrogate against (project_plan.md §6 W5 + §6 W6) as
+:class:`DesignVector` + :class:`MissionScenario` pairs, plus the
+published truth numbers in ``data/published_traverse_data.csv``.
 
-Scope and choices
+Two-tier registry
 -----------------
-- **Included:** Pragyan (Chandrayaan-3, 2023), Yutu-2 (Chang'e-4, 2019),
-  Sojourner (Mars Pathfinder, 1997). Rashid is *not* in the traverse
-  comparison because its mission ended on the Hakuto-R lander failure
-  before deployment; it was already validated for mass in Week 3 and
-  re-appears in Week 12 as the rediscovery-test target.
-- **Sojourner included despite being a Mars rover** to (a) give us a
-  non-lunar comparison point with actual published traverse distance,
-  and (b) exercise the evaluator's ``gravity_m_per_s2`` keyword as a
-  scaling sanity check. Its row in the registry carries
-  ``gravity_m_per_s2 = 3.71`` to signal the override.
+The registry is split into two tiers via :attr:`RoverRegistryEntry.is_flown`:
+
+- **Flown** (``is_flown=True``): rovers with actual ground-truth flight
+  data. Used by:
+
+  * Layer-0 truth comparison (Week 5 acceptance gate,
+    :func:`roverdevkit.validation.rover_comparison.compare_all`),
+    which scores the evaluator vs published traverse / peak-solar /
+    thermal data.
+  * Layer-1 surrogate sanity check (Week 6,
+    :func:`roverdevkit.surrogate.baselines.predict_for_registry_rovers`).
+
+  Currently: **Pragyan** (Chandrayaan-3, 2023), **Yutu-2** (Chang'e-4,
+  2019).
+
+- **Design-target** (``is_flown=False``): well-spec'd lunar micro-rover
+  designs that did not fly (lander loss or still in development). Used
+  only for Layer-1 surrogate sanity. Layer-0 truth comparison is
+  skipped because there's no ground-truth flight data.
+
+  Currently: **MoonRanger** (CMU/Astrobotic, in development),
+  **Rashid-1** (MBRSC/UAE, lost on Hakuto-R Mission 1, 2023).
+
+Helpers:
+
+- :func:`registry`        — all entries (flown + design-target).
+- :func:`flown_registry`  — flown subset (Layer-0 use).
+- :func:`registry_by_name` — single lookup, all tiers.
+
+Scope decisions
+---------------
+- **Sojourner removed (2026-04-25).** Was a Mars-gravity sentinel; its
+  multiple OOD-ness in the surrogate's design / scenario / gravity
+  space made it counterproductive for the Layer-1 sanity check.
+  Project narrowed to lunar micro-rover scope.
+- **Iris not added.** Battery-only rover (no solar array) violates the
+  surrogate's energy-architecture assumptions; would require a schema
+  extension to model honestly.
 - **Not a tradespace input.** These scenarios live next to the canonical
   four in :data:`SCENARIO_DIR` but are excluded from
   :func:`list_scenarios` so Phase-3 sweeps never pick them up.
@@ -37,7 +65,6 @@ from roverdevkit.power.thermal import ThermalArchitecture
 from roverdevkit.schema import DesignVector, MissionScenario
 
 GRAVITY_MOON_M_PER_S2: float = 1.625
-GRAVITY_MARS_M_PER_S2: float = 3.71
 
 DEFAULT_TRUTH_CSV: Path = (
     Path(__file__).resolve().parents[2] / "data" / "published_traverse_data.csv"
@@ -51,21 +78,40 @@ DEFAULT_TRUTH_CSV: Path = (
 
 @dataclass(frozen=True)
 class RoverRegistryEntry:
-    """One rover bundled with the scenario it actually flew.
+    """One rover bundled with the scenario it actually flew (or would have).
 
     Attributes
     ----------
     rover_name
         Short key used to look up published truth in
-        :func:`load_truth_table`.
+        :func:`load_truth_table` (flown rovers only).
     design
         12-D design vector reconstructed from public specs + documented
         imputations.
     scenario
-        Mission context matching the real rover's operating environment.
+        Mission context matching the real rover's operating environment
+        (or its design-target landing site for non-flown entries).
     gravity_m_per_s2
         Passed through to the evaluator as ``gravity_m_per_s2``. Lunar
-        by default; Sojourner overrides to Mars.
+        for all current entries (the Mars-gravity Sojourner sentinel
+        was removed when the project narrowed to lunar micro-rovers).
+    thermal_architecture
+        Per-rover thermal model (RHU power, surface area, hibernation
+        load, sink temperatures) capturing the rover's actual thermal
+        design rather than a generic default.
+    panel_efficiency
+        DC-level conversion efficiency at the rover's operating point.
+        Distinct from the tradespace-default 0.28 (GaAs triple-junction
+        beginning-of-life) because real rovers use different cell techs
+        and see end-of-life degradation that the default doesn't model.
+    panel_dust_factor
+        Mission-integrated dust-transmission factor in (0, 1].
+        Rover-specific because real dust accumulation is highly
+        mission-dependent; lunar day-1 values differ from steady-state.
+    is_flown
+        Whether the rover successfully deployed and produced
+        ground-truth flight data. Drives whether the entry participates
+        in the Layer-0 truth comparison (see module docstring).
     imputation_notes
         Per-field notes on which design-vector entries were imputed and
         how.
@@ -77,24 +123,14 @@ class RoverRegistryEntry:
     gravity_m_per_s2: float
     thermal_architecture: ThermalArchitecture
     panel_efficiency: float
-    """DC-level conversion efficiency at the rover's operating point.
-
-    Distinct from the tradespace-default 0.28 (GaAs triple-junction
-    beginning-of-life) because real rovers use different cell techs
-    and see end-of-life degradation that the default doesn't model."""
-
     panel_dust_factor: float
-    """Mission-integrated dust-transmission factor in (0, 1].
-
-    Rover-specific because real dust accumulation is highly
-    mission-dependent; lunar day-1 values differ from steady-state."""
-
+    is_flown: bool
     imputation_notes: str
 
 
 @dataclass(frozen=True)
 class PublishedTruth:
-    """Published truth values for one rover-scenario pair."""
+    """Published truth values for one rover-scenario pair (flown rovers only)."""
 
     rover_name: str
     scenario_name: str
@@ -111,7 +147,7 @@ class PublishedTruth:
 
 
 # ---------------------------------------------------------------------------
-# Registry builders
+# Registry builders — flown rovers
 # ---------------------------------------------------------------------------
 
 
@@ -157,6 +193,7 @@ def _pragyan_entry() -> RoverRegistryEntry:
         thermal_architecture=thermal,
         panel_efficiency=0.22,  # ISRO space-grade triple-junction, BOL
         panel_dust_factor=0.85,  # Lunar Day 1 only; limited dust build-up
+        is_flown=True,
         imputation_notes=(
             "wheel_width, wheelbase, grouser_height/count, chassis_mass, "
             "nominal_speed_mps, drive_duty_cycle imputed from class "
@@ -182,16 +219,20 @@ def _yutu2_entry() -> RoverRegistryEntry:
     #   during peak drive+heater operation, which is a different case);
     # - drive_duty_cycle = 0.15 (~7 h drive per day during a 5-day active
     #   window; matches per-lunar-day ~25 m drive distance).
-    # Note: Yutu-2 is out of the 5-50 kg design-space class; chassis_mass
-    # is held at the schema's 35 kg ceiling, and the prediction will
-    # under-call its capability proportionally. Documented limitation.
+    # Note: Yutu-2 has a published all-up flight mass of ~135 kg; the
+    # registry holds chassis_mass at 35 kg because that is the published
+    # chassis ex-payload value (the analytical mass-up model adds payload
+    # / power-system / motor / structure margins on top). After the v3
+    # LHS bounds widening (chassis ceiling 35 -> 50 kg), this 35 kg
+    # value sits inside the surrogate's training support rather than at
+    # the corner.
     design = DesignVector(
         wheel_radius_m=0.15,
         wheel_width_m=0.15,
         grouser_height_m=0.012,
         grouser_count=18,
         n_wheels=6,
-        chassis_mass_kg=35.0,  # schema ceiling; true ~30-40 kg ex-payload
+        chassis_mass_kg=35.0,  # published chassis ex-payload
         wheelbase_m=1.0,
         solar_area_m2=1.3,
         battery_capacity_wh=130.0,
@@ -222,83 +263,202 @@ def _yutu2_entry() -> RoverRegistryEntry:
         thermal_architecture=thermal,
         panel_efficiency=0.20,  # Chinese triple-junction EOL after many
         panel_dust_factor=0.55,  # lunar days (major dust accumulation)
+        is_flown=True,
         imputation_notes=(
-            "Yutu-2 is out-of-class (135 kg vs 5-50 kg design space); "
-            "chassis_mass held at 35 kg ceiling. wheelbase, grouser specs, "
-            "drive_duty_cycle imputed from published images and the per-"
-            "lunar-day ~25 m drive distance target."
+            "chassis_mass set to 35 kg (published ex-payload chassis "
+            "value; in-distribution under v3 LHS bounds 3-50 kg). "
+            "Yutu-2's all-up flight mass is ~135 kg including payload, "
+            "structure, and power system margins which the analytical "
+            "mass-up model adds on top of chassis_mass. wheelbase, "
+            "grouser specs, drive_duty_cycle imputed from published "
+            "images and the per-lunar-day ~25 m drive distance target."
         ),
     )
 
 
-def _sojourner_entry() -> RoverRegistryEntry:
-    # Published specs (Wilcox & Nguyen 1998): 10.6 kg total, 6 wheels at
-    # r=65 mm x 80 mm width, ~0.22 m^2 solar array (GaAs), 40 Wh
-    # primary battery, ~16 W peak power, cumulative ~100 m over 83 sols.
-    # Imputations:
-    # - chassis_mass_kg = 3.5 (~33 % of total per Wilcox & Nguyen);
-    # - wheelbase_m = 0.3 (published mechanical drawings);
-    # - grouser specs h=0.010 x 12 (Sojourner had stainless-steel
-    #   cleats; 10 mm x 12 cleats per wheel);
-    # - avionics_power_w = 5 (design-space floor; Sojourner's CPU was
-    #   a 2 MHz 80C85 drawing very little);
-    # - nominal_speed_mps = 0.01 (10 mm/s, Wilcox & Nguyen);
-    # - drive_duty_cycle = 0.1 (Sojourner drove only a small fraction
-    #   of each sol; ~1 m per sol x 100 sols / 83 sols ~ minutes of
-    #   drive per day).
+# ---------------------------------------------------------------------------
+# Registry builders — design-target (non-flown) rovers
+# ---------------------------------------------------------------------------
+
+
+def _moonranger_entry() -> RoverRegistryEntry:
+    # Direct cites (Kumar et al. i-SAIRAS 2020 #5068, MoonRanger Project
+    # labs page, Astrobotic NASA LSITP award):
+    # - chassis_mass_kg total: 13 kg
+    # - n_wheels: 4
+    # - max mechanical speed: 0.07 m/s ("7 cm/sec")
+    # - mission duration: 8 Earth days
+    # - rover length: ~0.65 m (half-length 0.325 m used for FOV calc)
+    # - camera height: 0.25 m
+    # - lunar South Pole, no RHU (operates in single daylight period).
+    #
+    # Imputations (back-solve + class match to Rashid-1):
+    # - wheel_radius_m = 0.10, wheel_width_m = 0.08: class-match to
+    #   Rashid-1 (10 kg, r = 0.10 m, w = 0.08 m). MoonRanger photos on
+    #   labs.ri.cmu.edu show similar wheel proportions to Rashid.
+    # - grouser_height_m = 0.012, grouser_count = 12: class-typical for
+    #   ~0.10 m radius lunar wheel (12 % of radius); photos show
+    #   prominent grousers.
+    # - wheelbase_m = 0.40: body length ~0.65 m minus wheel diameter
+    #   ~ 0.45 m, rounded to 0.40.
+    # - solar_area_m2 = 0.30: polar back-solve. 1 km/Earth-day at
+    #   ~0.05 m/s nominal => ~5.5 h drive per day. 30 W drive + 25 W
+    #   avionics x 24 h ~ 1320 Wh/day. With 8 h sun and 0.20 effective
+    #   eff at low elevation => ~165 W solar peak => 0.30 m^2 array.
+    # - battery_capacity_wh = 100: ~3-4 h off-sun continuous ops + dawn
+    #   cold-start; class-typical for 13 kg polar rover.
+    # - avionics_power_w = 25: NVIDIA TX2i (~10 W) + space-hardened RTOS
+    #   MCU (~3 W) + cameras + IMU + sun sensor + comms ~ 25 W active.
+    # - nominal_speed_mps = 0.05: 70 % of max mech, planning headroom.
+    # - drive_duty_cycle = 0.20: 1 km/day target / 0.05 m/s ~ 5.5 h
+    #   drive per 24 h Earth day = 0.23; rounded down for ops slack.
     design = DesignVector(
-        wheel_radius_m=0.065,
+        wheel_radius_m=0.10,
         wheel_width_m=0.08,
-        grouser_height_m=0.010,
+        grouser_height_m=0.012,
         grouser_count=12,
-        n_wheels=6,
-        chassis_mass_kg=3.5,
-        wheelbase_m=0.3,
-        solar_area_m2=0.22,
-        battery_capacity_wh=40.0,
-        avionics_power_w=5.0,
-        nominal_speed_mps=0.01,
-        drive_duty_cycle=0.1,
+        n_wheels=4,
+        chassis_mass_kg=13.0,
+        wheelbase_m=0.40,
+        solar_area_m2=0.30,
+        battery_capacity_wh=100.0,
+        avionics_power_w=25.0,
+        nominal_speed_mps=0.05,
+        drive_duty_cycle=0.20,
     )
-    # Thermal: Sojourner carried 3x Pu-238 RHUs (~1 W each) and used a
-    # Warm Electronics Box with silica aerogel insulation plus phase-
-    # change materials (Pathfinder spec). The lunar-tuned model is a
-    # poor match; we approximate with a much warmer sink (Mars-night
-    # is ~180 K, and the WEB's skin only sees ~200-220 K), small
-    # effective radiating area (0.05 m^2 after aerogel), and the
-    # nominal 3 W RHU power. This is a known limitation; the Sojourner
-    # thermal prediction is more about "sanity-check the wrapper" than
-    # physical fidelity.
+    # Thermal: MoonRanger carries no RHU (Kumar et al. 2020); operates
+    # only in lunar daylight at the polar landing site. Polar thermal
+    # design favours low alpha to keep hot-case rejection manageable
+    # given near-continuous low-elevation sun.
     thermal = ThermalArchitecture(
-        surface_area_m2=0.05,
-        rhu_power_w=3.0,
+        surface_area_m2=0.20,
+        absorptivity=0.20,
+        rhu_power_w=0.0,
         hibernation_power_w=2.0,
-        sink_temp_lunar_night_k=210.0,  # Mars-night WEB skin proxy
     )
     return RoverRegistryEntry(
-        rover_name="Sojourner",
+        rover_name="MoonRanger",
         design=design,
-        scenario=load_scenario("mpf_sojourner_ares_vallis"),
-        gravity_m_per_s2=GRAVITY_MARS_M_PER_S2,
+        scenario=load_scenario("moonranger_polar_demo"),
+        gravity_m_per_s2=GRAVITY_MOON_M_PER_S2,
         thermal_architecture=thermal,
-        panel_efficiency=0.17,  # GaAs/Ge single-junction of 1997 vintage
-        panel_dust_factor=0.80,  # Mars dust accumulation over 83 sols
+        panel_efficiency=0.28,  # modern triple-junction GaAs BOL
+        panel_dust_factor=0.95,  # brand-new array, 8-day mission
+        is_flown=False,
         imputation_notes=(
-            "Mars-gravity case. chassis_mass_kg, wheelbase, grouser specs, "
-            "drive_duty_cycle imputed per Wilcox & Nguyen 1998. Soil "
-            "model uses GRC-1 (lunar simulant) as a rough proxy for "
-            "Ares Vallis regolith; known limitation."
+            "Cited: total mass (13 kg), n_wheels (4), max mech speed "
+            "(0.07 m/s), mission duration (8 d), no RHU. Imputed: wheel "
+            "radius/width and grousers (class-match to Rashid-1); "
+            "wheelbase from published rover length; solar / battery / "
+            "avionics from a power budget back-solve against the "
+            "kilometer-per-day exploration target."
         ),
     )
+
+
+def _rashid1_entry() -> RoverRegistryEntry:
+    # Direct cites (Hurrell et al. 2025 SSR 221:37 wheel paper,
+    # Els et al. LPSC 2021 #1905 instrumentation paper, ESA + Wikipedia
+    # ELM page):
+    # - chassis_mass_kg total: 10 kg
+    # - n_wheels: 4
+    # - wheel_radius_m: 0.10 ("radius of 100 mm")
+    # - wheel_width_m: 0.08 ("width of 80 mm")
+    # - grouser_height_m: 0.015 (15 mm flight grouser; Hurrell 2025
+    #   distinguishes from the 20 mm closed-side test wheel)
+    # - grouser_count: 14
+    # - wheelbase_m: 0.50 (footprint 0.535 x 0.539 m per LPSC 2021)
+    # - nominal_speed_mps: 0.02 ("typical micro-rover operation speed",
+    #   used as the experimental drive velocity in Hurrell 2025)
+    # - landing site: Atlas crater, Mare Frigoris (~47 N, 44 E)
+    # - mission duration: 1 lunar day (~14 Earth days), no RHU.
+    #
+    # Imputations:
+    # - solar_area_m2 = 0.25: 0.5 x 0.5 m chassis with deployable mast;
+    #   flat array bound ~0.25 m^2. Power back-solve: at lunar noon
+    #   ~ 47 N, 0.20 eff x 0.25 m^2 x 0.85 dust ~ 32 W peak, sufficient
+    #   for the science-heavy ~15 W avionics with battery buffering.
+    # - battery_capacity_wh = 50: class-typical for 10 kg rover with
+    #   14-day target; supports overnight Wi-Fi data return to lander.
+    # - avionics_power_w = 15: 2x wide-field cameras + CAM-M micro
+    #   imager + CAM-T thermal imager + 4x Langmuir probes + Wi-Fi
+    #   comms (Els et al. 2021 inventory).
+    # - drive_duty_cycle = 0.15: matches Pragyan's drive cadence for
+    #   comparable mission duration.
+    design = DesignVector(
+        wheel_radius_m=0.10,
+        wheel_width_m=0.08,
+        grouser_height_m=0.015,
+        grouser_count=14,
+        n_wheels=4,
+        chassis_mass_kg=10.0,
+        wheelbase_m=0.50,
+        solar_area_m2=0.25,
+        battery_capacity_wh=50.0,
+        avionics_power_w=15.0,
+        nominal_speed_mps=0.02,
+        drive_duty_cycle=0.15,
+    )
+    # Thermal: Rashid-1 carries no RHU. Mid-latitude diurnal swing
+    # benefits from balanced absorptivity; the actual flight rover used
+    # MLI + heaters but we don't model the latter explicitly.
+    thermal = ThermalArchitecture(
+        surface_area_m2=0.18,
+        absorptivity=0.30,
+        rhu_power_w=0.0,
+        hibernation_power_w=2.0,
+    )
+    return RoverRegistryEntry(
+        rover_name="Rashid-1",
+        design=design,
+        scenario=load_scenario("rashid_atlas_crater"),
+        gravity_m_per_s2=GRAVITY_MOON_M_PER_S2,
+        thermal_architecture=thermal,
+        panel_efficiency=0.28,  # modern triple-junction GaAs BOL
+        panel_dust_factor=0.85,  # Lunar Day 1 only (matches Pragyan)
+        is_flown=False,
+        imputation_notes=(
+            "Cited (Hurrell et al. 2025 SSR; Els et al. LPSC 2021): "
+            "total mass, n_wheels, wheel radius/width, grouser height "
+            "(flight 15 mm) and count (14), wheelbase, nominal speed. "
+            "Imputed: solar / battery / avionics from a power-budget "
+            "back-solve against the science-payload inventory and "
+            "single-lunar-day mission target."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Registry accessors
+# ---------------------------------------------------------------------------
 
 
 def registry() -> tuple[RoverRegistryEntry, ...]:
-    """Return the frozen tuple of (rover, scenario, gravity) triples."""
-    return (_pragyan_entry(), _yutu2_entry(), _sojourner_entry())
+    """Return the frozen tuple of all registry entries (flown + design-target).
+
+    Use this for Layer-1 surrogate sanity checks (Week 6+). For Layer-0
+    truth comparisons, use :func:`flown_registry` instead.
+    """
+    return (
+        _pragyan_entry(),
+        _yutu2_entry(),
+        _moonranger_entry(),
+        _rashid1_entry(),
+    )
+
+
+def flown_registry() -> tuple[RoverRegistryEntry, ...]:
+    """Return only the rovers that successfully deployed and flew.
+
+    Used by the Week-5 acceptance gate
+    (:func:`roverdevkit.validation.rover_comparison.compare_all`)
+    because design-target rovers have no published flight truth.
+    """
+    return tuple(e for e in registry() if e.is_flown)
 
 
 def registry_by_name(name: str) -> RoverRegistryEntry:
-    """Look up a single registry entry by rover name."""
+    """Look up a single registry entry by rover name (any tier)."""
     for entry in registry():
         if entry.rover_name == name:
             return entry
@@ -320,7 +480,7 @@ def _parse_bool(value: str) -> bool:
 
 
 def load_truth_table(csv_path: Path | str | None = None) -> list[PublishedTruth]:
-    """Read ``data/published_traverse_data.csv``."""
+    """Read ``data/published_traverse_data.csv`` (flown rovers only)."""
     path = Path(csv_path) if csv_path else DEFAULT_TRUTH_CSV
     rows: list[PublishedTruth] = []
     with path.open() as fh:
@@ -346,8 +506,12 @@ def load_truth_table(csv_path: Path | str | None = None) -> list[PublishedTruth]
 
 
 def truth_by_rover(rover_name: str, csv_path: Path | str | None = None) -> PublishedTruth:
-    """Fetch the published-truth row for one rover."""
+    """Fetch the published-truth row for one rover (must be flown)."""
     for row in load_truth_table(csv_path):
         if row.rover_name == rover_name:
             return row
-    raise KeyError(f"no published-truth row for rover {rover_name!r}.")
+    raise KeyError(
+        f"no published-truth row for rover {rover_name!r}. "
+        "(Truth rows are only stored for flown rovers; design-target "
+        "rovers like MoonRanger/Rashid-1 are intentionally absent.)"
+    )

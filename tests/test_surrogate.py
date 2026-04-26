@@ -25,10 +25,8 @@ def test_design_feature_count() -> None:
 
 
 def test_input_columns_compose_from_groups() -> None:
-    expected = (
-        DESIGN_FEATURE_COLUMNS + SCENARIO_NUMERIC_COLUMNS + SCENARIO_CATEGORICAL_COLUMNS
-    )
-    assert INPUT_COLUMNS == expected
+    expected = DESIGN_FEATURE_COLUMNS + SCENARIO_NUMERIC_COLUMNS + SCENARIO_CATEGORICAL_COLUMNS
+    assert expected == INPUT_COLUMNS
     assert len(INPUT_COLUMNS) == 25  # 12 + 9 + 4
 
 
