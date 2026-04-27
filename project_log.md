@@ -2953,3 +2953,100 @@ Yutu-2-ish design vector.
 frontend scaffold and a "single design" panel that hits `/predict` and
 renders the median + PI as a small Plotly chart.
 
+---
+
+## 2026-04-27 — W10 step-2: React frontend + single-design panel (done)
+
+**Decision.** Stand up the Phase-3 frontend on the stack the plan
+calls for (Vite + React 19 + TS + Tailwind v4 + shadcn/ui +
+TanStack Query + Zustand + Plotly), and ship one page that
+exercises the only useful backend route shipped in step-1: `POST
+/predict`. Everything else (sweeps, feasibility surface, NSGA-II
+launcher, Pareto explorer, SHAP) lives in later steps.
+
+**Why a single-design panel first.** It's the smallest deliverable
+that lights up the full vertical slice: typed schema → React form
+→ TanStack Query mutation → FastAPI route → quantile bundles →
+chart + table. Once that vertical works, every later panel reuses
+the API client, the design-vector store, the Plotly wrapper, and
+the shadcn primitives.
+
+**What landed.**
+
+- `webapp/frontend/` scaffolded via `npm create vite@latest …
+  --template react-ts`, then layered with:
+  - Tailwind CSS v4 + shadcn neutral theme (CSS-first config in
+    `src/index.css`; `components.json` for the CLI).
+  - shadcn primitives copied locally: `Button`, `Card`, `Input`,
+    `Label`, `Select` (Radix-backed). Disabled
+    `react-refresh/only-export-components` for `src/components/ui/`
+    since shadcn intentionally co-locates components and variant
+    helpers.
+  - TanStack Query + Zustand + plotly.js-dist-min + react-plotly.js
+    (slim Plotly bundle to keep the wire size at ~1.5 MB gzipped).
+- `src/types/api.ts` — hand-written mirrors of the backend Pydantic
+  schemas (`DesignVector`, `MissionScenario`, `PredictRequest`,
+  `PredictResponse`, …) plus a `DESIGN_BOUNDS` table (min / max /
+  step / unit / label / blurb) used to drive the form. Bounds match
+  `roverdevkit/schema.py`; we will codegen from OpenAPI if the API
+  surface grows past ~10 routes, but for now the manual definitions
+  give better doc strings at the call sites.
+- `src/lib/api.ts` — minimal typed fetch client with `ApiError`.
+  Calls are relative; the Vite dev proxy forwards `/healthz`,
+  `/version`, `/scenarios`, `/registry`, and `/predict` to
+  `http://localhost:8000`, and a co-served bundle gets them for
+  free. Override via `VITE_API_BASE` for split-host deployments.
+- `src/hooks/{use-scenarios,use-predict,use-health}.ts` — TanStack
+  Query wrappers. `predict` is a mutation (user-driven), the others
+  are queries with sensible stale times.
+- `src/store/design-store.ts` — Zustand store holding the current
+  design + scenario draft. Default rover is a Yutu-2-ish design that
+  sits comfortably inside the v3-widened LHS bounds.
+- `src/components/{scenario-picker,design-form,prediction-chart,
+  prediction-panel,app-shell}.tsx` — UI layer.
+- `src/pages/design-explorer.tsx` — the only route in the MVP:
+  scenario picker + 12-D form on the left, Plotly chart + numeric
+  q05/q50/q95 table on the right. PI viz uses a horizontal
+  line+marker per target rather than a stacked bar (cleaner reading
+  and avoids `bar.base` typing weirdness in `@types/plotly.js`).
+- App shell with a status badge fed by `/healthz` (green when
+  `surrogate_loaded`, amber when degraded) and a footer carrying
+  the API + dataset versions.
+
+**Plotly slim build.** `plotly.js-dist-min` is untyped; routed it
+through a one-line ambient declaration (`src/types/plotly-dist-min.d.ts`)
+that exposes a default `unknown` and use `@types/plotly.js` for
+trace + layout typing in the chart component. Production bundle is
+~5 MB raw / 1.5 MB gzipped — acceptable for a research tool, the
+known Plotly-cost line item we'll revisit if/when we add SHAP and
+NSGA-II views in later steps.
+
+**Verification.**
+
+- `npm run lint` — clean (0 errors / 0 warnings).
+- `npm run build` — green; outputs `dist/index.html`,
+  `dist/assets/index-*.css` (~25 kB), `dist/assets/index-*.js`
+  (~5 MB raw / 1.5 MB gzipped).
+- Live smoke test: started both servers, hit
+  `GET http://localhost:5173/`, `GET /scenarios`, and
+  `POST /predict` through the dev proxy. All returned 200 and
+  monotone quantile predictions for the Yutu-2-ish default design
+  on `equatorial_mare_traverse` (range 7.27 / 7.39 / 8.22 km, slope
+  capability 15.95 / 16.17 / 16.53°, mass 38.18 / 38.61 / 39.08 kg,
+  energy margin 528.83 / 624.20 / 625.13 %).
+
+**Wall-clock.** End-to-end click-to-render is dominated by the
+`POST /predict` round-trip (~5–10 ms locally) plus a single Plotly
+render (~50 ms first time, faster on resubmit). Frontend dev cold
+start ~1 s; HMR updates are sub-100 ms.
+
+**One follow-up dep nit.** Vite's rolldown bundler couldn't
+resolve `tslib` from `react-remove-scroll` (transitive of
+`@radix-ui/react-select`). Added `tslib` as an explicit dep to
+fix the production build; cheap and standard-issue for a Radix +
+modern-bundler combo.
+
+**Next.** Phase 3, Week 10, step 3 — parametric sweep view (one
+or two design axes, sliders, line/heatmap) hitting a new
+`POST /sweep` route that streams progress over SSE.
+
