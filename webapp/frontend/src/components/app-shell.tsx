@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 
-import { useHealth, useVersion } from "@/hooks/use-health";
+import { AboutModelDialog } from "@/components/about-model-dialog";
+import { Button } from "@/components/ui/button";
+import { useHealth } from "@/hooks/use-health";
 
-/** Top-level layout: header with version + body slot. */
+/** Top-level layout: header with status badge + body slot. */
 export function AppShell({ children }: { children: ReactNode }) {
   const { data: health } = useHealth();
-  const { data: version } = useVersion();
 
   return (
     <div className="min-h-screen">
@@ -16,35 +17,22 @@ export function AppShell({ children }: { children: ReactNode }) {
               roverdevkit · tradespace explorer
             </h1>
             <p className="text-xs text-[var(--color-muted-foreground)]">
-              Lunar micro-rover design space, powered by the W8 quantile-XGBoost
-              surrogate over the corrected mission evaluator.
+              Predict mobility, mass, range, and energy margin for a candidate
+              lunar micro-rover, with calibrated 90% prediction intervals.
             </p>
           </div>
-          <StatusBadge
-            ok={health?.surrogate_loaded ?? false}
-            apiVersion={version?.api_version ?? "—"}
-            datasetVersion={version?.dataset_version ?? "—"}
-          />
+          <StatusBadge ok={health?.surrogate_loaded ?? false} />
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-6">{children}</main>
       <footer className="mx-auto max-w-6xl px-6 py-6 text-xs text-[var(--color-muted-foreground)]">
-        Phase 3 prototype · backend: FastAPI + XGBoost · frontend: React + Vite
-        · Space Systems Autonomy Lab, Duke University.
+        Space Systems Autonomy Lab · Duke University
       </footer>
     </div>
   );
 }
 
-function StatusBadge({
-  ok,
-  apiVersion,
-  datasetVersion,
-}: {
-  ok: boolean;
-  apiVersion: string;
-  datasetVersion: string;
-}) {
+function StatusBadge({ ok }: { ok: boolean }) {
   return (
     <div className="flex items-center gap-3 text-xs">
       <span
@@ -62,11 +50,17 @@ function StatusBadge({
             (ok ? "bg-emerald-500" : "bg-amber-500")
           }
         />
-        {ok ? "Surrogate live" : "Surrogate degraded"}
+        {ok ? "Model online" : "Model unavailable"}
       </span>
-      <span className="text-[var(--color-muted-foreground)]">
-        API {apiVersion} · dataset {datasetVersion}
-      </span>
+      <AboutModelDialog>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 px-2.5 text-xs font-normal"
+        >
+          About this model
+        </Button>
+      </AboutModelDialog>
     </div>
   );
 }

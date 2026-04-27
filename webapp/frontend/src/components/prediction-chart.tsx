@@ -45,7 +45,7 @@ export function PredictionChart({ predictions }: PredictionChartProps) {
       y: [label, label],
       xaxis: xref,
       yaxis: yref,
-      line: { color: "rgba(99, 102, 241, 0.55)", width: 6 },
+      line: { color: "rgba(65, 105, 225, 0.55)", width: 6 },
       hovertemplate: `90 %% PI: [${fmt(p.q05)}, ${fmt(p.q95)}] ${meta.unit}<extra></extra>`,
     });
     traces.push({
@@ -58,7 +58,7 @@ export function PredictionChart({ predictions }: PredictionChartProps) {
       marker: {
         symbol: "diamond",
         size: 14,
-        color: "rgba(67, 56, 202, 1)",
+        color: "rgba(40, 75, 180, 1)",
         line: { color: "white", width: 1.5 },
       },
       hovertemplate: `median: ${fmt(p.q50)} ${meta.unit}<extra></extra>`,

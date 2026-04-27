@@ -180,7 +180,8 @@ export const DESIGN_BOUNDS: Record<keyof DesignVector, FieldBounds> = {
     step: 0.5,
     unit: "kg",
     label: "Chassis mass",
-    description: "m_c, dry chassis mass before mass-up.",
+    description:
+      "m_c, dry chassis mass (subsystem masses are added by the model).",
   },
   wheelbase_m: {
     min: 0.3,
@@ -232,7 +233,7 @@ export const DESIGN_BOUNDS: Record<keyof DesignVector, FieldBounds> = {
   },
 };
 
-/** Display metadata for the four primary surrogate targets. */
+/** User-facing display metadata for the four predicted performance metrics. */
 export const TARGET_META: Record<
   PrimaryTarget,
   { label: string; unit: string; description: string }
@@ -241,21 +242,24 @@ export const TARGET_META: Record<
     label: "Range",
     unit: "km",
     description:
-      "Capability-at-designed-duty traverse over the scenario window.",
+      "Distance the rover can traverse during the scenario at its commanded drive duty cycle.",
   },
   energy_margin_raw_pct: {
-    label: "Energy margin (raw)",
+    label: "Energy margin",
     unit: "%",
-    description: "Unbounded (E_gen − E_used) / E_used over the traverse.",
+    description:
+      "(Energy generated − energy used) / energy used over the traverse. Positive values mean surplus solar generation; large positive values are typical for energy-rich designs.",
   },
   slope_capability_deg: {
     label: "Slope capability",
     unit: "deg",
-    description: "Maximum sustainable slope at the sampled soil.",
+    description:
+      "Steepest slope the rover can sustain on the scenario's soil at its commanded speed.",
   },
   total_mass_kg: {
     label: "Total mass",
     unit: "kg",
-    description: "Mass-up estimate including motors, structure, payload.",
+    description:
+      "Estimated dry mass of the rover, including chassis, motors, structure, power, and avionics.",
   },
 };

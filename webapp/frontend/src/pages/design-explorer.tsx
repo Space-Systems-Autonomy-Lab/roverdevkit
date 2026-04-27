@@ -31,11 +31,11 @@ export function DesignExplorer() {
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <Card>
         <CardHeader>
-          <CardTitle>Design vector</CardTitle>
+          <CardTitle>Rover design</CardTitle>
           <CardDescription>
-            12-D rover design plus a canonical mission scenario. Bounds match
-            the v3-widened LHS sampling; the backend will reject anything
-            outside them with a 422.
+            Choose a mission scenario and configure a candidate rover. Inputs
+            are bounded to the calibrated design space; out-of-range values are
+            rejected.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -49,7 +49,7 @@ export function DesignExplorer() {
             size="lg"
           >
             <Play className="mr-2 h-4 w-4" />
-            {predict.isPending ? "Evaluating…" : "Run surrogate"}
+            {predict.isPending ? "Predicting…" : "Predict performance"}
           </Button>
         </CardContent>
       </Card>

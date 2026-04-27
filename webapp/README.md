@@ -36,8 +36,22 @@ Sweeps (`/sweep`), feasibility (`/feasibility`), and NSGA-II
 From the repo root, with the `roverdevkit` conda env activated:
 
 ```bash
-pip install -e ".[webapp]"
+conda activate roverdevkit
+which uvicorn   # sanity check — should resolve inside the conda env
+pip install -e ".[webapp]"   # only needed once
 uvicorn webapp.backend.main:app --reload --port 8000
+```
+
+If `which uvicorn` points outside the conda env (e.g. /usr/bin/uvicorn,
+or a brew-installed Python), your shell didn't pick up the conda
+activation. Falling through to the bare `uvicorn` will hit a
+`ModuleNotFoundError: No module named 'xgboost'` (or similar) because
+the surrogate's runtime deps live in the conda env, not the system
+interpreter. Use the absolute path as a fallback:
+
+```bash
+/opt/homebrew/Caskroom/miniforge/base/envs/roverdevkit/bin/uvicorn \
+  webapp.backend.main:app --reload --port 8000
 ```
 
 OpenAPI docs at <http://localhost:8000/docs>.

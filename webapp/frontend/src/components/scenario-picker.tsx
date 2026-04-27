@@ -46,8 +46,8 @@ export function ScenarioPicker() {
         <p className="text-xs text-[var(--color-muted-foreground)]">
           {selected.scenario.latitude_deg.toFixed(1)}° lat ·{" "}
           {selected.scenario.mission_duration_earth_days.toFixed(0)} d ·{" "}
-          {selected.scenario.terrain_class.replace("_", " ")} · soil{" "}
-          {selected.soil.simulant}
+          {humanText(selected.scenario.terrain_class)} · soil{" "}
+          {humanText(selected.soil.simulant)}
         </p>
       ) : null}
       {isError ? (
@@ -64,4 +64,9 @@ function humanScenario(name: string): string {
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
+}
+
+/** Lowercase, underscore-free rendering for free-form labels. */
+function humanText(value: string): string {
+  return value.replace(/_/g, " ");
 }

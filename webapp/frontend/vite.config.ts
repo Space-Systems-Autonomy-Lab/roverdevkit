@@ -14,6 +14,14 @@ export default defineConfig({
       "@": path.resolve(here, "./src"),
     },
   },
+  optimizeDeps: {
+    // `react-plotly.js/factory` and `plotly.js-dist-min` are CJS;
+    // pinning them in optimizeDeps tells Vite to pre-bundle via
+    // esbuild so the CJS-default interop is deterministic at dev
+    // time (otherwise the default import occasionally resolves to
+    // a `{ default: fn }` wrapper instead of the function).
+    include: ["plotly.js-dist-min", "react-plotly.js/factory"],
+  },
   server: {
     port: 5173,
     proxy: {

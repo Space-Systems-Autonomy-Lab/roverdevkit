@@ -26,19 +26,17 @@ export function PredictionPanel({
   return (
     <Card className="h-full">
       <CardHeader>
-        <CardTitle>Surrogate prediction</CardTitle>
+        <CardTitle>Predicted performance</CardTitle>
         <CardDescription>
-          Median (♦) and 90 % prediction interval from the W8 step-4
-          quantile-XGBoost surrogate trained on{" "}
-          <code className="text-xs">lhs_v4</code> (40 k corrected-evaluator
-          rows).
+          Median estimate (♦) and calibrated 90% prediction interval for each
+          performance metric.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {isPending ? (
           <div className="flex items-center gap-2 text-sm text-[var(--color-muted-foreground)]">
             <Loader2 className="h-4 w-4 animate-spin" />
-            Calling /predict…
+            Predicting…
           </div>
         ) : null}
 
@@ -90,7 +88,8 @@ export function PredictionPanel({
           </>
         ) : isPending ? null : (
           <p className="text-sm text-[var(--color-muted-foreground)]">
-            Submit a design vector on the left to evaluate it.
+            Configure a rover on the left and click <em>Predict performance</em>{" "}
+            to evaluate it.
           </p>
         )}
       </CardContent>
