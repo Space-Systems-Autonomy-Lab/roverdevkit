@@ -97,6 +97,8 @@ ignore = ["E501"]
 "scripts/calibrate_intervals.py" = ["N806"]
 "tests/test_surrogate_tuning.py" = ["N806"]
 "tests/test_surrogate_uncertainty.py" = ["N803", "N806"]
+"webapp/backend/services/predict.py" = ["N803"]
+"webapp/backend/routes/predict.py" = ["N806"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -108,7 +110,11 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "webapp/backend/tests"]
+# Repo root is added to sys.path so `import webapp.backend...` works
+# without installing the webapp package. The webapp is a deployment
+# artifact, not a Python distribution; it lives next to roverdevkit.
+pythonpath = ["."]
 addopts = "-ra --strict-markers"
 markers = [
   "slow: slow tests (>10s)",

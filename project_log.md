@@ -2898,3 +2898,58 @@ in place from Phase 2.
 **Next.** Phase 3, Week 10, step 1 — FastAPI backend skeleton with
 `/api/predict`, `/api/registry`, `/api/scenarios`, `/api/healthz`,
 cached loaders, and httpx tests.
+
+---
+
+## 2026-04-26 — W10 step-1: FastAPI backend skeleton (done)
+
+**Decision.** Ship the Phase-3 backend MVP: a thin FastAPI layer that
+imports the existing roverdevkit core in-process and serves
+`/healthz`, `/version`, `/scenarios`, `/registry`, and `POST /predict`.
+No physics or ML logic in the route handlers — every endpoint
+delegates to a function in `webapp.backend.services` or the existing
+core, so the API cannot drift from the methodology paper's reported
+numbers.
+
+**Predict path uses the W8 step-4 quantile bundles directly.** One
+artifact (`reports/week8_intervals_v4/quantile_bundles.joblib`) powers
+both point predictions and 90 % PIs: the τ=0.5 head is within R² 0.005
+of the W8 step-3 tuned median on the test split, so there is no
+practical reason to load a second model just for the median. This is
+the option the user approved at the start of the step ("`Lets go`").
+
+**What landed.**
+
+- `webapp/backend/{config,schemas,loaders,app,main}.py` — settings
+  driven by `ROVERDEVKIT_*` env vars, `lru_cache`d loaders, FastAPI
+  factory, uvicorn entry point.
+- `webapp/backend/services/predict.py` — feature-row construction
+  (mirrors `roverdevkit.surrogate.dataset._flatten_*`) plus the
+  surrogate dispatch loop.
+- `webapp/backend/routes/{health,scenarios,registry,predict}.py` —
+  one router per resource group; predict handles 404 (unknown
+  scenario), 422 (DesignVector schema rejection), 503 (artifact
+  missing).
+- `webapp/backend/tests/{test_health,test_scenarios,test_registry,test_predict}.py`
+  — 13 tests, all green. Predict tests skip cleanly when the joblib
+  artifact is absent so a contributor without the W8 artifact can
+  still run the rest.
+- `pyproject.toml`: added `webapp/backend/tests` to `testpaths`,
+  `pythonpath = ["."]` so `import webapp.backend...` works without
+  installing the webapp as a distribution, and N803/N806 ignores for
+  the two service / route modules that use sklearn-style `X` naming.
+- `webapp/README.md` — quickstart and route table.
+
+**Wall-clock.** Predict end-to-end (request → feature row → 4 quantile
+heads × 3 levels × XGBoost.predict on a single row → JSON) is ~5 ms on
+the local box. Healthz / scenarios / registry are all sub-ms.
+
+**Smoke run.** `pytest tests/ webapp/backend/tests` shows 261 + 13
+pass. Live `uvicorn webapp.backend.main:app` answers correctly on
+healthz, scenarios, predict for the four canonical scenarios with a
+Yutu-2-ish design vector.
+
+**Next.** Phase 3, Week 10, step 2 — React 19 + Vite + TS + shadcn/ui
+frontend scaffold and a "single design" panel that hits `/predict` and
+renders the median + PI as a small Plotly chart.
+
