@@ -10,8 +10,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# `lib/` and `lib64/` are anchored to the repo root so the Python venv
+# layout doesn't accidentally swallow `webapp/frontend/src/lib/`.
+/lib/
+/lib64/
 parts/
 sdist/
 var/

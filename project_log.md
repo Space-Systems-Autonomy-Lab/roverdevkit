@@ -3147,3 +3147,72 @@ later). `webapp/backend/{services,routes}/evaluate.py`,
 components/{constraint-details-dialog,design-slider-field,
 registry-overlay-picker}.tsx}`.
 
+## 2026-04-27 — W11 step-1: parametric sweeps (1-D + 2-D)
+
+**Decision.** Add a "Parametric sweep" tab that lets the user pin a
+base design and vary one or two design-vector fields on a grid,
+returning a line plot (1-D) or heatmap (2-D) of any of the four
+primary performance metrics. Backend selection is automatic:
+corrected evaluator (ground truth) below 200 cells, calibrated
+quantile-XGBoost surrogate (vectorised) above. Both can be forced
+explicitly when the user wants to compare or stress-test.
+
+**Context.** The W8 reframe positions the surrogate as an
+inner-loop accelerator + uncertainty layer rather than the
+user-facing deliverable. Parametric sweeps are the canonical
+"inner loop" use-case: a 1-D resolution of 11 cells stays on the
+evaluator (~440 ms total at 40 ms / cell post-W7.7 lift-out), and
+a 2-D 30 × 30 grid (900 cells) routes to the surrogate (~1 s for
+the whole grid). The two backends emit the same primary metrics so
+the response shape is invariant in either path.
+
+**What changed.**
+
+- New `roverdevkit/tradespace/sweeps.py`: pure-Python +
+  numpy core. `SweepAxis` / `SweepSpec` / `SweepResult` containers,
+  `expand_grid` Cartesian product (row-major: y outer, x inner so
+  the 2-D matrix maps to Plotly heatmap orientation without
+  transposition), `pick_backend` auto / explicit dispatcher with
+  per-backend hard limits (`EVALUATOR_HARD_LIMIT=2500`,
+  `SURROGATE_HARD_LIMIT=40_000`).
+- `webapp/backend/{services,routes}/sweep.py`: dispatcher loads the
+  artifacts (`get_correction`, `get_quantile_bundles`,
+  `get_soil_for_simulant`) once per process, runs the chosen
+  backend, packs the result into a `SweepResponse`. The route
+  caches identical requests via SHA-256 of canonical-JSON payloads
+  (`@lru_cache(maxsize=32)`) so re-clicking a config is free.
+- New schemas `SweepAxisIn` / `SweepRequest` / `SweepResponse` in
+  `webapp/backend/schemas.py`. Vite proxy patched for `/sweep`.
+- New frontend page `pages/parametric-sweep.tsx` with
+  `components/sweep-config.tsx` (target + axis pickers, optional
+  Y axis, backend selector) and `components/sweep-chart.tsx`
+  (Plotly line for 1-D, viridis heatmap for 2-D, with overlay
+  rover markers — dashed verticals in 1-D, scatter diamonds in
+  2-D — using the same colour palette as the single-design page).
+- New `store/sweep-store.ts` (axis drafts) and
+  `store/view-store.ts` (top-level tab state). `AppShell` now
+  renders a 2-tab nav.
+
+**Smoke test.** Energy-margin sweep over solar area
+(0.20 → 1.20 m², 6 cells) on equatorial mare scenario produces a
+clean monotonic 181 % → 1 587 % response. 30 × 30 surrogate sweep
+over (wheel_radius, solar_area) returns 900 cells in ~1 s.
+
+**Tests.** 13 pure unit tests in
+`tests/test_tradespace_sweeps.py` (axis validation, grid expansion
+row-major + integer rounding, backend auto / hard-limit
+dispatch). 6 integration tests in
+`webapp/backend/tests/test_sweep.py` (1-D / 2-D evaluator,
+surrogate path when artifact present, axis-rejection,
+hard-limit 422, unknown-scenario 404). All 38 webapp + sweep
+tests pass in 0.6 s.
+
+**Pointers.** Plan: §Phase 3 / Week 11 / step-1.
+`roverdevkit/tradespace/sweeps.py`,
+`webapp/backend/{services,routes}/sweep.py`,
+`webapp/frontend/src/pages/parametric-sweep.tsx`,
+`webapp/frontend/src/components/sweep-{config,chart}.tsx`.
+
+**Next.** Week 11 step-2 (NSGA-II Pareto explorer page) or step-3
+(per-target sensitivity plots) per `project_plan.md` §6 / Phase 3.
+

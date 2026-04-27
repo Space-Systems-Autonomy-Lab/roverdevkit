@@ -3,10 +3,19 @@ import type { ReactNode } from "react";
 import { AboutModelDialog } from "@/components/about-model-dialog";
 import { Button } from "@/components/ui/button";
 import { useHealth } from "@/hooks/use-health";
+import { cn } from "@/lib/utils";
+import { useViewStore, type AppView } from "@/store/view-store";
+
+const TABS: Array<{ id: AppView; label: string }> = [
+  { id: "design", label: "Single design" },
+  { id: "sweep", label: "Parametric sweep" },
+];
 
 /** Top-level layout: header with status badge + body slot. */
 export function AppShell({ children }: { children: ReactNode }) {
   const { data: health } = useHealth();
+  const view = useViewStore((s) => s.view);
+  const setView = useViewStore((s) => s.setView);
 
   return (
     <div className="min-h-screen">
@@ -23,6 +32,24 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <StatusBadge ok={health?.surrogate_loaded ?? false} />
         </div>
+        <nav className="mx-auto flex max-w-6xl gap-1 px-6 pb-2 text-sm">
+          {TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setView(tab.id)}
+              aria-pressed={view === tab.id}
+              className={cn(
+                "rounded-md px-3 py-1.5 text-sm transition-colors",
+                view === tab.id
+                  ? "bg-[var(--color-accent)] text-[var(--color-accent-foreground)]"
+                  : "text-[var(--color-muted-foreground)] hover:bg-[var(--color-muted)]",
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </header>
       <main className="mx-auto max-w-6xl px-6 py-6">{children}</main>
       <footer className="mx-auto max-w-6xl px-6 py-6 text-xs text-[var(--color-muted-foreground)]">

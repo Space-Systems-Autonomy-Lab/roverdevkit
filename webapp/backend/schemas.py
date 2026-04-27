@@ -42,6 +42,9 @@ __all__ = [
     "ScenarioListResponse",
     "ScenarioWithSoil",
     "SoilParametersOut",
+    "SweepAxisIn",
+    "SweepRequest",
+    "SweepResponse",
     "ThermalDiagnosticOut",
     "VersionResponse",
 ]
@@ -331,4 +334,73 @@ class EvaluateResponse(BaseModel):
     thermal: ThermalDiagnosticOut
     motor_torque: MotorTorqueDiagnosticOut
     used_scm_correction: bool
+    elapsed_ms: float
+
+
+class SweepAxisIn(BaseModel):
+    """One axis of a parametric sweep (mirror of ``SweepAxis``).
+
+    The variable name is validated server-side against
+    :data:`roverdevkit.tradespace.sweeps.SWEEPABLE_VARIABLES`; the
+    ``lo`` / ``hi`` range is validated against the ``DesignVector``
+    schema bounds inside :func:`roverdevkit.tradespace.sweeps.expand_grid`
+    (Pydantic on the per-cell ``DesignVector`` rebuild surfaces the
+    out-of-bounds case as a ValidationError -> 422).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    variable: str
+    lo: float
+    hi: float
+    n_points: int = Field(ge=2, le=200)
+
+
+class SweepRequest(BaseModel):
+    """``POST /sweep`` body."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    target: str
+    """One of the primary regression targets (range_km,
+    energy_margin_raw_pct, slope_capability_deg, total_mass_kg)."""
+
+    x_axis: SweepAxisIn
+    y_axis: SweepAxisIn | None = None
+
+    base_design: DesignVector
+    """The "rest of the design": every dimension not on an axis is
+    held at this value across the whole grid."""
+
+    scenario_name: str
+    backend: Literal["auto", "evaluator", "surrogate"] = "auto"
+
+
+class SweepResponse(BaseModel):
+    """Sweep grid + the values matrix + provenance.
+
+    ``z_values`` is row-major: 1-D ``(n_x,)`` for a 1-D sweep,
+    2-D ``(n_y, n_x)`` for 2-D. The 2-D shape matches Plotly's
+    heatmap convention (rows = y, columns = x) so the frontend can
+    pass it through unchanged.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    target: str
+    scenario_name: str
+    x_variable: str
+    y_variable: str | None
+    x_values: list[float]
+    y_values: list[float] | None
+    z_values: list[float] | list[list[float]]
+    backend_used: Literal["evaluator", "surrogate"]
+    backend_requested: Literal["auto", "evaluator", "surrogate"]
+    used_scm_correction: bool
+    """``True`` when the evaluator path ran with the SCM correction
+    artifact loaded; ``False`` when running on BW-only fallback or
+    when the surrogate path served the request (the surrogate was
+    already trained on a corrected corpus)."""
+
+    n_cells: int
     elapsed_ms: float

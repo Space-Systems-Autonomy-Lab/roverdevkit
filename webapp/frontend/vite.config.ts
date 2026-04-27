@@ -36,6 +36,7 @@ export default defineConfig({
       "/registry": "http://localhost:8000",
       "/predict": "http://localhost:8000",
       "/evaluate": "http://localhost:8000",
+      "/sweep": "http://localhost:8000",
     },
   },
 });

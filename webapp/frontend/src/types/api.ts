@@ -197,6 +197,77 @@ export interface VersionResponse {
   quantile_bundles_path: string;
 }
 
+/**
+ * Mirror of the FastAPI `SweepAxisIn` schema. A sweep axis defines a
+ * linearly-spaced grid `[lo, hi]` over a single design-vector field
+ * with `n_points` cells (inclusive at both ends).
+ */
+export interface SweepAxisIn {
+  variable: SweepableVariable;
+  lo: number;
+  hi: number;
+  n_points: number;
+}
+
+/**
+ * Subset of `DesignVector` keys the sweep page lets the user vary on
+ * a grid axis. Mirrors `roverdevkit.tradespace.sweeps.SWEEPABLE_VARIABLES`;
+ * `n_wheels` is excluded because it is binary.
+ */
+export type SweepableVariable =
+  | "wheel_radius_m"
+  | "wheel_width_m"
+  | "grouser_height_m"
+  | "grouser_count"
+  | "chassis_mass_kg"
+  | "wheelbase_m"
+  | "solar_area_m2"
+  | "battery_capacity_wh"
+  | "avionics_power_w"
+  | "nominal_speed_mps"
+  | "drive_duty_cycle";
+
+export const SWEEPABLE_VARIABLES: readonly SweepableVariable[] = [
+  "wheel_radius_m",
+  "wheel_width_m",
+  "grouser_height_m",
+  "grouser_count",
+  "chassis_mass_kg",
+  "wheelbase_m",
+  "solar_area_m2",
+  "battery_capacity_wh",
+  "avionics_power_w",
+  "nominal_speed_mps",
+  "drive_duty_cycle",
+] as const;
+
+export type SweepBackend = "auto" | "evaluator" | "surrogate";
+
+export interface SweepRequest {
+  target: PrimaryTarget;
+  x_axis: SweepAxisIn;
+  y_axis?: SweepAxisIn | null;
+  base_design: DesignVector;
+  scenario_name: string;
+  backend?: SweepBackend;
+}
+
+export interface SweepResponse {
+  target: PrimaryTarget;
+  scenario_name: string;
+  x_variable: SweepableVariable;
+  y_variable: SweepableVariable | null;
+  x_values: number[];
+  y_values: number[] | null;
+  /** 1-D `(n_x,)` for a 1-D sweep, 2-D `(n_y, n_x)` for a 2-D sweep. */
+  z_values: number[] | number[][];
+  backend_used: "evaluator" | "surrogate";
+  backend_requested: SweepBackend;
+  used_scm_correction: boolean;
+  n_cells: number;
+  elapsed_ms: number;
+}
+
 export interface RegistryEntrySummary {
   rover_name: string;
   is_flown: boolean;
