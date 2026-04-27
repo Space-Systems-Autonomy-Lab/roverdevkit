@@ -3046,7 +3046,104 @@ resolve `tslib` from `react-remove-scroll` (transitive of
 fix the production build; cheap and standard-issue for a Radix +
 modern-bundler combo.
 
-**Next.** Phase 3, Week 10, step 3 — parametric sweep view (one
-or two design axes, sliders, line/heatmap) hitting a new
-`POST /sweep` route that streams progress over SSE.
+**Next.** Phase 3, Week 10, step 3 — single-design panel polish:
+researcher-facing copy sweep, About-this-model dialog, registry
+overlays, hybrid evaluator-as-median + surrogate-as-PI dispatch,
+slider design inputs, and click-for-details constraint dialogs.
+The parametric sweep view moved to Week 11 step-1 in the reframed
+plan; logged below.
+
+## 2026-04-27 — W10 step-2 polish: researcher-facing UI
+
+**Decision.** Strip internal jargon (week numbers, dataset
+versions, internal stack names) from the panel; add an "About this
+model" dialog that explains the prediction stack at researcher
+depth; switch the PI accent from purple to royal blue per user
+feedback. Commit `47d790d`.
+
+**Why.** The previous draft leaked our project vocabulary into the
+UI ("Dataset v4", "Week-8 step-3 tuned XGB"). Researchers landing
+on the tool will not know what those phrases mean and the
+About-modal is a much better home for the detail anyway. Same
+energy as the W6 repo-bloat audit: surface only what the user
+needs at the surface, link to the detail.
+
+**Pointers.** Stack and performance numbers in the dialog
+(`webapp/frontend/src/components/about-model-dialog.tsx`) cite
+the same artefacts already documented in the W7-W8 entries —
+single source of truth. Royal-blue colour token added to the
+chart helper.
+
+## 2026-04-27 — W10 step-3: hybrid eval/predict, overlays, sliders, constraint dialogs
+
+**Decision.** Wire the corrected mission evaluator into the
+single-design panel as the source of truth for medians and
+real-rover overlays, keep the surrogate only for the calibrated
+90 % PI band. Commit `0a5e6d6`. This concretises the W8 reframe
+("surrogate is an inner-loop accelerator + UQ layer, not the
+deliverable") inside the webapp.
+
+**Why hybrid here.** Single-design queries are inherently one-shot
+(< 50 ms either way), so paying the corrected-evaluator cost buys
+ground-truth values *and* the failure-mode metadata that the
+surrogate's regression can't return (peak / cold thermal
+temperatures, peak motor torque, sizing ceiling, stall flag). The
+surrogate's quantile heads still earn their keep as the PI band
+the evaluator can't produce. Bulk inner loops (sweeps, NSGA-II,
+feasibility heatmaps) keep using the surrogate exclusively — the
+W7.7 cost model still binds at large batch sizes.
+
+**What landed.**
+
+- Backend: `POST /evaluate` route + `services/evaluate.py` thin
+  wrapper around `evaluate_verbose` with cached SCM-correction
+  loader. New structured response blocks `ThermalDiagnosticOut`
+  (peak / cold temps, limits, hot/cold pass flags, surface area,
+  RHU and hibernation power) and `MotorTorqueDiagnosticOut` (peak
+  torque, sizing ceiling `sf · μ · (m·g/N) · R`, stall flag).
+  `DetailedEvaluation` extended with the full `ThermalResult`
+  (non-breaking; one constructor updated). 6 new pytest cases pin
+  the schema, value sanity vs `/predict`, and the cold-case-drives-
+  failure invariant.
+- Frontend: `DesignExplorer` fans out parallel `/evaluate` +
+  `/predict` per click; `useRegistryEvaluations` swaps overlays
+  from surrogate-predictions to evaluator-ground-truth. New
+  `RegistryOverlayPicker` lets users toggle the comparison set.
+- UI inputs: 11 continuous fields become sliders + editable
+  number inputs (`DesignSliderField` + Radix slider primitive);
+  selected real-rover values render as coloured tick marks on the
+  slider track. `n_wheels` becomes a segmented control with rover
+  dots underneath.
+- New `ConstraintDetailsButton` Radix dialog, opened from the
+  footer chips on both pass and fail. Thermal body shows hot /
+  cold rows with limits and a tailored "why this design fails the
+  cold case" paragraph (RHU mass is not a design lever — it is
+  diagnostic by W6 decision). Motor-torque body shows peak vs
+  ceiling, the closed form, the margin, and the stall flag.
+
+**Verification.** Backend `pytest webapp/backend/tests` 19/19
+green (was 18/18 + 1 new thermal cold-case test). Frontend
+`npm run lint` and `npm run build` clean. Live smoke confirmed
+for Pragyan and a default Yutu-2-ish design on
+`equatorial_mare_traverse`: dialog explains the cold-case
+failure (≈ −140 °C vs −30 °C floor, 0 W RHU).
+
+**Why thermal still fires for nominally-good designs.** With
+hibernation = 2 W and RHU = 0 W, every design in the LHS bounds
+sits below −30 °C in the cold case. Real lunar micro-rovers
+(Pragyan, Yutu-2, MoonRanger, Rashid-1) carry RHUs precisely to
+close this gap. We surface this as a diagnostic flag rather than
+a design lever because RHU mass is not part of the design vector
+in this study — turning it into a free constraint slack would
+let optimisers wave the flag away. The dialog explains this
+explicitly.
+
+**Pointers.** Plan: §Phase 3 / Week 10 / step-3 (still labelled
+"single-design panel" — step-3 absorbed what was originally
+step-4's backend-toggle work, since the W8 reframe demoted the
+side-by-side comparison view to a power-user diagnostic for
+later). `webapp/backend/{services,routes}/evaluate.py`,
+`webapp/frontend/src/{hooks/use-evaluate.ts,
+components/{constraint-details-dialog,design-slider-field,
+registry-overlay-picker}.tsx}`.
 

@@ -8,7 +8,7 @@ webapp/
 └── frontend/       React 19 + Vite + TS + shadcn/ui single-page app
 ```
 
-## Backend (Week-10 step-1, MVP)
+## Backend
 
 The backend is a thin FastAPI layer over the corrected mission evaluator
 and the W8 step-4 quantile-XGBoost surrogate. It does **no** physics or
@@ -16,20 +16,21 @@ ML of its own — every endpoint composes the same Python objects the
 notebooks and CLI scripts use, so behaviour cannot drift from the
 methodology paper's reported numbers.
 
-Routes shipped in step-1:
+Routes shipped through Week 10:
 
-| Method | Path                       | Purpose                                                |
-|--------|----------------------------|--------------------------------------------------------|
-| GET    | `/healthz`                 | Liveness + artifact-presence probe.                    |
-| GET    | `/version`                 | Dataset / surrogate / git versions for the about box.  |
-| GET    | `/scenarios`               | List the 4 canonical tradespace scenarios.             |
-| GET    | `/scenarios/{name}`        | Full `MissionScenario` plus nominal soil parameters.   |
-| GET    | `/registry`                | Real-rover registry summary (Pragyan, Yutu-2, etc.).   |
-| GET    | `/registry/{name}`         | Single rover entry with its design vector + scenario.  |
-| POST   | `/predict`                 | Median + 90 % PI for a `(design, scenario)` pair.      |
+| Method | Path                       | Purpose                                                          |
+|--------|----------------------------|------------------------------------------------------------------|
+| GET    | `/healthz`                 | Liveness + artifact-presence probe.                              |
+| GET    | `/version`                 | Dataset / surrogate / git versions for the about box.            |
+| GET    | `/scenarios`               | List the 4 canonical tradespace scenarios.                       |
+| GET    | `/scenarios/{name}`        | Full `MissionScenario` plus nominal soil parameters.             |
+| GET    | `/registry`                | Real-rover registry summary (Pragyan, Yutu-2, etc.).             |
+| GET    | `/registry/{name}`         | Single rover entry with its design vector + scenario.            |
+| POST   | `/predict`                 | Surrogate median + 90 % PI for a `(design, scenario)` pair.      |
+| POST   | `/evaluate`                | SCM-corrected mission evaluator on one `(design, scenario)`.     |
 
 Sweeps (`/sweep`), feasibility (`/feasibility`), and NSGA-II
-(`/optimize`) land in subsequent steps.
+(`/optimize`) land in Week 11.
 
 ## Run locally
 
@@ -56,27 +57,40 @@ interpreter. Use the absolute path as a fallback:
 
 OpenAPI docs at <http://localhost:8000/docs>.
 
-## Frontend (Week-10 step-2, single-design panel)
+## Frontend
 
 The frontend is a Vite + React 19 + TypeScript single-page app. It
 talks to the backend through a typed fetch client (`src/lib/api.ts`)
-whose response types mirror the FastAPI Pydantic schemas
-1:1; the dev server proxies `/healthz`, `/scenarios`, `/registry`,
-`/version`, and `/predict` to `http://localhost:8000` so calls stay
+whose response types mirror the FastAPI Pydantic schemas 1:1; the dev
+server proxies `/healthz`, `/scenarios`, `/registry`, `/version`,
+`/predict`, and `/evaluate` to `http://localhost:8000` so calls stay
 relative regardless of deployment shape.
 
-What ships in step-2:
+What ships through Week 10:
 
 - **Design Explorer** page — the only route in the MVP.
   - `ScenarioPicker` — drop-down sourced from `GET /scenarios`.
-  - `DesignForm` — twelve numeric inputs covering the
-    `DesignVector` schema, with bounds, units, and short
-    descriptions pulled from `src/types/api.ts::DESIGN_BOUNDS`.
-  - `PredictionPanel` — Plotly chart (median ♦ + 90 % PI line per
-    target) plus a numeric q05 / q50 / q95 table. Driven by
-    `POST /predict` via TanStack Query mutation.
-- App shell — header with surrogate-status badge fed by `/healthz`
-  and a footer with the project tagline.
+  - `DesignForm` — slider + editable-number inputs for 11 continuous
+    fields, segmented control for `n_wheels`. Coloured tick marks on
+    each slider show the corresponding values for every selected
+    real-rover overlay.
+  - `RegistryOverlayPicker` — toggle Pragyan, Yutu-2, MoonRanger,
+    Rashid-1 on/off; selections drive both the chart overlays and the
+    slider tick marks.
+  - `PredictionPanel` — Plotly chart with three layers per target:
+    deterministic median ♦ from the corrected evaluator, surrogate's
+    calibrated 90 % PI as a royal-blue band, and one coloured circle
+    per selected real rover (also from the evaluator). Numeric
+    q05 / median / q95 table below the chart. Footer chips for the
+    constraint flags (thermal survival, motor torque); each chip
+    opens a click-for-details Radix dialog with peak / cold
+    temperatures, sizing ceiling, stall flag, and tailored failure
+    explanation. Driven by parallel `POST /predict` + `POST /evaluate`
+    via TanStack Query mutations.
+- **About-this-model** dialog — researcher-facing explanation of the
+  prediction stack (corrected evaluator + wheel-level SCM correction +
+  quantile XGBoost) with performance numbers.
+- App shell — header with surrogate-status badge fed by `/healthz`.
 - TanStack Query for server state, Zustand for the local
   design/scenario draft.
 
@@ -110,6 +124,13 @@ uvicorn webapp.backend.main:app --reload --port 8000
 # terminal 2
 cd webapp/frontend && npm run dev
 # open http://localhost:5173
+```
+
+Or via the top-level Makefile (one terminal):
+
+```bash
+make webapp-dev      # boots backend + frontend, Ctrl+C kills both
+make webapp-test     # backend pytest + frontend lint + frontend build
 ```
 
 ## Tests
