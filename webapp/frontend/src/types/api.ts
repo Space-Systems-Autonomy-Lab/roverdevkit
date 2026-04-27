@@ -266,6 +266,24 @@ export interface SweepResponse {
   used_scm_correction: boolean;
   n_cells: number;
   elapsed_ms: number;
+  sensitivity: SweepSensitivity;
+}
+
+/**
+ * Per-axis spread of the swept metric. Powers the inline sensitivity hint
+ * shown under the chart so the user can quickly tell when a metric is
+ * effectively flat across the chosen grid (saturation), or when one axis
+ * dominates the other by an order of magnitude (visual masking).
+ */
+export interface SweepSensitivity {
+  /** max(z) - min(z) over the whole grid, in target units. */
+  total_spread: number;
+  /** total_spread / max(|max|, |min|, eps); dimensionless. */
+  relative_spread: number;
+  /** Median marginal x-spread (1-D = total_spread). */
+  axis_spread_x: number;
+  /** Median marginal y-spread; null for 1-D sweeps. */
+  axis_spread_y: number | null;
 }
 
 export interface RegistryEntrySummary {

@@ -3216,3 +3216,99 @@ tests pass in 0.6 s.
 **Next.** Week 11 step-2 (NSGA-II Pareto explorer page) or step-3
 (per-target sensitivity plots) per `project_plan.md` §6 / Phase 3.
 
+## 2026-04-27 — W11 step-2: BW kernel gains grouser shear-thrust + sensitivity-hint UX
+
+**Decision.** Plug the modeling gap that made `slope_capability_deg`
+flat in `grouser_height_m` / `grouser_count`, then add an inline
+sensitivity hint under the sweep chart so users can tell the
+difference between "metric saturated on this grid" (visualization
+caveat) and "this dimension genuinely doesn't matter" (real result).
+Bump the analytical dataset to **v5** to retrain the surrogate end
+to end on the new physics.
+
+**Context.** Two related complaints from W11 step-1:
+
+1. *Grouser height / count had no effect on slope capability.*
+   `roverdevkit.terramechanics.bekker_wong._integrate_forces` only
+   used wheel radius and width in the shear-stress integrand. A
+   purely smooth-rim Bekker-Wong wheel can't express the engaged
+   shear plane below the grousers, so neither the analytical kernel
+   nor its surrogate had any signal to learn from. Real fix is in
+   physics, not in the renderer.
+2. *Wheel width had a vanishing effect on slope vs. wheel radius on
+   a shared color scale.* This one is genuinely "minor axis is real
+   but visually masked by the dominant axis." Right fix is a
+   caption, not new physics.
+
+**What changed (physics).**
+
+- `roverdevkit/terramechanics/bekker_wong.py` gained
+  `_grouser_shear_lift(wheel) -> float`, a multiplicative lift
+  applied to the shear stress τ everywhere it's integrated. Form
+  follows Iizuka & Kubota 2011's engaged-grouser shear-thrust model:
+  arc-density `N_g · h_g / (2πR)` with a saturation cap
+  (`_GROUSER_LIFT_CAP = 0.6`) calibrated to GRC-1 / FJS-1 lab data
+  where the tractive coefficient gain plateaus at ~50–60 %. Reduces
+  to 1.0 when `N_g = 0` or `h_g = 0`, so smooth-rim baselines are
+  unchanged.
+- 7 new unit tests in `tests/test_terramechanics.py`: zero-grouser
+  identity, arc-density formula, saturation at the cap, monotone
+  drawbar pull in `h_g`, monotone-then-saturating in `N_g`,
+  smooth-rim invariant, end-to-end slope-capability picks up signal.
+
+**What changed (data + surrogate).**
+
+- `roverdevkit/surrogate/dataset.SCHEMA_VERSION` bumped to `"v5"`.
+- New 40 000-row `data/analytical/lhs_v5.parquet` rebuilt with the
+  v5 BW kernel + SCM correction in 126 s. 18 / 40 000 graceful
+  failures (extreme low-radius / soft-soil combos that fully bury
+  the wheel — same failure mode as v4).
+- Re-tuned XGB baselines on v5: `reports/week11_tuned_v5/` —
+  acceptance gate passes 5/5 (range_km R² 0.9993, energy_margin R²
+  0.9956, slope_capability R² 0.9877, total_mass R² 0.9997,
+  motor_torque AUC 0.981).
+- Re-calibrated 90 % quantile heads on v5:
+  `reports/week11_intervals_v5/` — empirical coverage 0.85 – 0.90
+  vs nominal 0.90 (raw, no isotonic repair); within the W8 step-4
+  quality bar.
+- `webapp/backend/config.py` defaults flipped to point at the v5
+  artifacts; `dataset_version` now `"v5"`.
+
+**What changed (UX).**
+
+- `roverdevkit/tradespace/sweeps.SweepSensitivity` +
+  `compute_sensitivity()`: per-axis median marginal spread,
+  total spread, and a relative-spread (dimensionless) metric.
+- New API field `SweepResponse.sensitivity` (mirror Pydantic class
+  `SweepSensitivityOut`).
+- New frontend `components/sweep-sensitivity-hint.tsx`: rendered
+  under `SweepChart` on the parametric-sweep page. Two render modes:
+  (a) "metric is saturated on this grid" when relative spread
+  < 1 %, with the actual spread + scale; (b) "axis X dominates Y by
+  N×" when the larger marginal spread is ≥ 5× the smaller (2-D
+  only). Otherwise renders nothing — no hint beats a noisy hint
+  when the chart already speaks.
+- 4 new unit tests in `tests/test_tradespace_sweeps.py` covering
+  1-D total / relative spread, all-flat 2-D grid, all-NaN safety,
+  x-dominated 2-D grid.
+
+**Verification.** Full repo test suite: 323 passed, 1 xfailed
+(unchanged Wong-textbook xfail, awaiting digitised reference). The
+W11 step-1 transitional `xfail` on
+`test_evaluate_and_predict_agree_within_surrogate_noise_floor` is
+removed — evaluator and v5 surrogate agree on the Yutu-2 sample
+within 5 % per primary target.
+
+**Pointers.** Plan: §Phase 3 / Week 11 / step-2.
+`roverdevkit/terramechanics/bekker_wong.py`,
+`roverdevkit/tradespace/sweeps.py`,
+`webapp/backend/{config,schemas,routes/sweep}.py`,
+`webapp/frontend/src/components/sweep-sensitivity-hint.tsx`,
+`reports/week11_tuned_v5/`, `reports/week11_intervals_v5/`,
+`data/analytical/lhs_v5.parquet`.
+
+**Next.** Week 11 step-3 (NSGA-II Pareto explorer) or fold the
+v5 calibration regression (slope_capability empirical coverage
+slipped 0.873 vs the v4 0.886) into a follow-up isotonic repair
+pass if it doesn't recover with conformal width inflation.
+

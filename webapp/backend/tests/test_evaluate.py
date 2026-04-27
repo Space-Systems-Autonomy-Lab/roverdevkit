@@ -10,6 +10,7 @@ test asserts ``used_scm_correction=False``.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 PRIMARY_TARGETS = {

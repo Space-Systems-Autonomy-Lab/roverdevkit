@@ -16,7 +16,9 @@ from roverdevkit.tradespace.sweeps import (
     EVALUATOR_HARD_LIMIT,
     SURROGATE_HARD_LIMIT,
     SweepAxis,
+    SweepResult,
     SweepSpec,
+    compute_sensitivity,
     expand_grid,
     pick_backend,
 )
@@ -157,6 +159,78 @@ def test_pick_backend_explicit_evaluator_hard_limit() -> None:
     )
     with pytest.raises(ValueError, match="evaluator hard limit"):
         pick_backend(spec)
+
+
+# ---------------------------------------------------------------------------
+# compute_sensitivity
+#
+# These tests build SweepResult objects directly with synthetic z grids so
+# we can pin down the spread numerics without running the evaluator.
+# ---------------------------------------------------------------------------
+
+
+def _make_result(
+    z: np.ndarray,
+    *,
+    x_n: int,
+    y_n: int | None,
+) -> SweepResult:
+    """Wrap a precomputed ``z`` array in a SweepResult for sensitivity tests."""
+    x_axis = SweepAxis("wheel_radius_m", 0.08, 0.18, x_n)
+    y_axis = (
+        None if y_n is None else SweepAxis("solar_area_m2", 0.4, 0.8, y_n)
+    )
+    spec = SweepSpec(target="range_km", x_axis=x_axis, y_axis=y_axis)
+    return SweepResult(
+        spec=spec,
+        x_values=x_axis.values(),
+        y_values=None if y_axis is None else y_axis.values(),
+        z_values=z,
+        backend_used="evaluator",
+        elapsed_s=0.0,
+    )
+
+
+def test_compute_sensitivity_1d_total_spread_and_relative() -> None:
+    z = np.array([10.0, 12.0, 15.0, 18.0, 20.0])
+    sens = compute_sensitivity(_make_result(z, x_n=5, y_n=None))
+    assert sens.total_spread == pytest.approx(10.0)
+    assert sens.relative_spread == pytest.approx(10.0 / 20.0)
+    assert sens.axis_spread_x == pytest.approx(10.0)
+    assert sens.axis_spread_y is None
+
+
+def test_compute_sensitivity_constant_grid_returns_zero_relative_spread() -> None:
+    # All-NaN guard sits on top, but a flat finite grid is the more
+    # interesting "metric saturated" branch that drives the UI hint.
+    z = np.full((4, 5), 3.7)
+    sens = compute_sensitivity(_make_result(z, x_n=5, y_n=4))
+    assert sens.total_spread == pytest.approx(0.0)
+    assert sens.relative_spread == pytest.approx(0.0)
+    assert sens.axis_spread_x == pytest.approx(0.0)
+    assert sens.axis_spread_y == pytest.approx(0.0)
+
+
+def test_compute_sensitivity_all_nan_grid_zeroed_safely() -> None:
+    z = np.full((3, 4), np.nan)
+    sens = compute_sensitivity(_make_result(z, x_n=4, y_n=3))
+    assert sens.total_spread == 0.0
+    assert sens.relative_spread == 0.0
+    assert sens.axis_spread_x == 0.0
+    assert sens.axis_spread_y == 0.0
+
+
+def test_compute_sensitivity_2d_x_dominated_grid() -> None:
+    # Each row varies strongly with column index (x), but rows differ
+    # only by a small additive shift (weak y dependence). Sensitivity
+    # along x should be ~10x sensitivity along y.
+    base_x = np.array([0.0, 5.0, 10.0])  # spread along x = 10
+    rows = np.stack([base_x, base_x + 1.0])  # spread along y at fixed x = 1
+    sens = compute_sensitivity(_make_result(rows, x_n=3, y_n=2))
+    assert sens.axis_spread_x == pytest.approx(10.0)
+    assert sens.axis_spread_y == pytest.approx(1.0)
+    # total spread spans both effects: 0 -> 11
+    assert sens.total_spread == pytest.approx(11.0)
 
 
 def test_pick_backend_explicit_surrogate_hard_limit() -> None:

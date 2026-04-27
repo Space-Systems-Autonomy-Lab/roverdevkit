@@ -9,14 +9,17 @@ volume in deployment without code changes.
 Environment variables
 ---------------------
 ``ROVERDEVKIT_QUANTILE_BUNDLES``
-    Path to ``quantile_bundles.joblib`` (W8 step-4 artifact).
-    Default: ``reports/week8_intervals_v4/quantile_bundles.joblib``.
+    Path to ``quantile_bundles.joblib`` (calibrated quantile XGB heads).
+    Default: ``reports/week11_intervals_v5/quantile_bundles.joblib`` —
+    the v5 retrain on lhs_v5.parquet after the BW kernel gained the
+    Iizuka & Kubota 2011 grouser shear-thrust term (W11 step-2).
 ``ROVERDEVKIT_TUNED_PARAMS``
-    Path to ``tuned_best_params.json`` (W8 step-3 artifact). Currently
-    informational only; reserved for later steps that may need to
-    refit. Default: ``reports/week8_tuned_v4/tuned_best_params.json``.
+    Path to ``tuned_best_params.json`` (tuned XGB hyperparameters).
+    Currently informational only; reserved for later steps that may
+    need to refit. Default:
+    ``reports/week11_tuned_v5/tuned_best_params.json``.
 ``ROVERDEVKIT_DATASET_VERSION``
-    Dataset version label echoed in ``/version``. Default ``v4``.
+    Dataset version label echoed in ``/version``. Default ``v5``.
 ``ROVERDEVKIT_CORS_ORIGINS``
     Comma-separated allow-list. Defaults to the Vite dev server.
 """
@@ -67,13 +70,13 @@ def get_settings() -> Settings:
     return Settings(
         quantile_bundles_path=_env_path(
             "ROVERDEVKIT_QUANTILE_BUNDLES",
-            REPO_ROOT / "reports" / "week8_intervals_v4" / "quantile_bundles.joblib",
+            REPO_ROOT / "reports" / "week11_intervals_v5" / "quantile_bundles.joblib",
         ),
         tuned_params_path=_env_path(
             "ROVERDEVKIT_TUNED_PARAMS",
-            REPO_ROOT / "reports" / "week8_tuned_v4" / "tuned_best_params.json",
+            REPO_ROOT / "reports" / "week11_tuned_v5" / "tuned_best_params.json",
         ),
-        dataset_version=os.environ.get("ROVERDEVKIT_DATASET_VERSION", "v4"),
+        dataset_version=os.environ.get("ROVERDEVKIT_DATASET_VERSION", "v5"),
         cors_origins=_env_csv(
             "ROVERDEVKIT_CORS_ORIGINS",
             ("http://localhost:5173", "http://127.0.0.1:5173"),

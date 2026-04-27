@@ -6,8 +6,20 @@ Each row is **one** `(design, scenario, soil)` triple evaluated by
 `roverdevkit.mission.evaluator.evaluate_verbose`, flattened into a
 single Parquet row.
 
-- **Schema version:** `v4` (see `dataset.SCHEMA_VERSION`).
-  - **v4 (current, 2026-04-26):** every row is evaluated with the wheel-level SCM correction (`data/scm/correction_v1.joblib`, `WheelLevelCorrection`) applied inside the analytical traverse loop. The `use_scm_correction` flag is recorded in the Parquet metadata footer. The Parquet column schema is byte-identical to v3; the version bump exists so a v3-trained surrogate (BW-only) isn't silently reused on a v4 dataset (BW + correction). The Week-7.7 bake-off (`reports/week7_7_bakeoff/decision.md`) showed the correction reduces feasibility flips vs SCM-direct from 12-56% to 0-1% per scenario family and shrinks continuous-target error by 5-12 percentage points, while running ~100× faster than SCM-direct. See `project_log.md` 2026-04-26 entries for the W7.5 gate decision and v4 build context.
+- **Schema version:** `v5` (see `dataset.SCHEMA_VERSION`).
+  - **v5 (current, 2026-04-27):** the Bekker-Wong kernel
+    (`roverdevkit/terramechanics/bekker_wong.py`) gained an
+    Iizuka & Kubota 2011 engaged-grouser shear-thrust term so
+    `slope_capability_deg` and the traverse-derived metrics (range,
+    energy margin) actually respond to `grouser_height_m` and
+    `grouser_count`. SCM correction is still composed row-wise on top.
+    The Parquet column schema is byte-identical to v4; the version
+    bump exists so a v4-trained surrogate isn't silently reused on
+    v5 labels (median `slope_capability_deg` shifts +2.6° / p95 +10.8°
+    on a sample, with traverse metrics shifting 12-15 % at the
+    median). See `project_log.md` 2026-04-27 (W11 step-2) for the
+    physics derivation and downstream retrain.
+  - **v4 (retired, 2026-04-26):** every row is evaluated with the wheel-level SCM correction (`data/scm/correction_v1.joblib`, `WheelLevelCorrection`) applied inside the analytical traverse loop. The `use_scm_correction` flag is recorded in the Parquet metadata footer. The Parquet column schema is byte-identical to v3; the version bump exists so a v3-trained surrogate (BW-only) isn't silently reused on a v4 dataset (BW + correction). The Week-7.7 bake-off (`reports/week7_7_bakeoff/decision.md`) showed the correction reduces feasibility flips vs SCM-direct from 12-56% to 0-1% per scenario family and shrinks continuous-target error by 5-12 percentage points, while running ~100× faster than SCM-direct. See `project_log.md` 2026-04-26 entries for the W7.5 gate decision and v4 build context.
   - **v3 (retired, 2026-04-25):** widened LHS bounds on `wheel_width_m` (0.15 → 0.20), `grouser_height_m` (0.012 → 0.020), and `chassis_mass_kg` (35 → 50) so the flown / design-target lunar micro-rovers in `roverdevkit.validation.rover_registry` (Yutu-2 ex-payload mass ~30-40 kg, Rashid-1 grouser 15 mm, Lunokhod-class wheel widths 20 cm) sit inside the surrogate's training support rather than at corner points. The Parquet column schema is byte-identical to v2; the version bump exists so a v2-trained surrogate isn't silently reused on a v3 dataset.
   - **v2 (retired):** removed `thermal_survival` from the metric column set. The system-level evaluator still computes it as a diagnostic but the surrogate does not consume or predict it. Rationale: the mass model treats RHU power and MLI quality as free, so `thermal_survival` reduces to a near-trivial gate ("did you add an RHU?") with no real design trade-off. The Pragyan/Yutu-2 thermal distinction stays in the Week-5 validation harness. A future mass-model upgrade that charges RHU/MLI mass would let thermal re-enter the schema as a real Pareto target (planned for the SCM-correction work in Phase 3).
   - **v1 (retired):** included `thermal_survival` as a feasibility flag.
@@ -18,15 +30,16 @@ single Parquet row.
   so the correction *adds* delta drawbar pull / driving torque / sinkage
   to the BW solve at every wheel-force step within `brentq`. The
   `use_scm_correction` flag in the Parquet footer records whether this
-  composition was active at build time (always `True` for v4).
-- **Canonical filename:** `lhs_v4.parquet` — current main training set,
+  composition was active at build time (always `True` for v5).
+- **Canonical filename:** `lhs_v5.parquet` — current main training set,
   40k rows at 10k × 4 scenario families on the v3 widened bounds with
-  v4 SCM correction. Pilot (`lhs_pilot.parquet`) and challenge
-  (`challenge_v1.parquet`) files are generated on demand from
-  `scripts/build_dataset.py`; only the canonical training set is
-  treated as a tracked artifact. Earlier versions (`lhs_v1`, `lhs_v2`,
-  `lhs_v3`) are retired; their build context lives in `project_log.md`
-  for historical reproducibility.
+  v4 SCM correction and the v5 grouser-aware BW kernel. Pilot
+  (`lhs_pilot.parquet`) and challenge (`challenge_v1.parquet`) files
+  are generated on demand from `scripts/build_dataset.py`; only the
+  canonical training set is treated as a tracked artifact. Earlier
+  versions (`lhs_v1`, `lhs_v2`, `lhs_v3`, `lhs_v4`) are retired;
+  their build context lives in `project_log.md` for historical
+  reproducibility.
 
 Dataset-level metadata is written to the Parquet file's schema footer;
 use `read_parquet_metadata(path)` to recover it (seed, sampler version,

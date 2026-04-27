@@ -179,6 +179,81 @@ class SweepResult:
     elapsed_s: float
 
 
+@dataclass(frozen=True)
+class SweepSensitivity:
+    """Per-axis spread of the swept metric, used for UI sensitivity hints.
+
+    Computed once on the server from a finished sweep. The frontend
+    consumes ``axis_spread`` to decide whether to surface a hint like
+    "y-axis only contributes 1 / 10th the spread of x" or
+    "metric is saturated on this grid".
+
+    Conventions
+    -----------
+    - ``total_spread`` = ``z.max() - z.min()``.
+    - ``axis_spread[x]`` = median over y of ``z[:, j].max() - z[:, j].min()``
+      (1-D sweeps simply use the total spread for the one axis).
+    - ``axis_spread[y]`` = median over x of ``z[j, :].max() - z[j, :].min()``.
+    - ``relative_spread`` = ``total_spread / max(|max|, |min|, ε)``.
+      Dimensionless; small values flag a near-uniform output.
+    """
+
+    total_spread: float
+    relative_spread: float
+    axis_spread_x: float
+    axis_spread_y: float | None
+
+
+def compute_sensitivity(result: SweepResult) -> SweepSensitivity:
+    """Marginal-spread sensitivity over the finished sweep grid.
+
+    See :class:`SweepSensitivity` for the exact convention. Returns
+    finite values for any non-empty grid; the relative_spread of a
+    grid where all values are zero is reported as 0.0.
+    """
+    z = np.asarray(result.z_values, dtype=float)
+    z_finite = z[np.isfinite(z)]
+    if z_finite.size == 0:
+        return SweepSensitivity(
+            total_spread=0.0,
+            relative_spread=0.0,
+            axis_spread_x=0.0,
+            axis_spread_y=None if result.y_values is None else 0.0,
+        )
+
+    z_max = float(np.nanmax(z))
+    z_min = float(np.nanmin(z))
+    total = z_max - z_min
+    scale = max(abs(z_max), abs(z_min), 1e-12)
+    rel = total / scale
+
+    if result.y_values is None or z.ndim == 1:
+        return SweepSensitivity(
+            total_spread=total,
+            relative_spread=rel,
+            axis_spread_x=total,
+            axis_spread_y=None,
+        )
+
+    # 2-D: median marginal spread along each axis. Median (rather than
+    # max) damps a single anomalous row from drowning out the rest of
+    # the surface; mean would over-weight outliers in the other
+    # direction. Median is the robust split.
+    #
+    # z has shape (n_y, n_x): rows = y, cols = x.
+    # Spread along x at fixed y_j is z[j, :].max() - z[j, :].min(),
+    # so np.nanmax(z, axis=1) - np.nanmin(z, axis=1) is the "x spread"
+    # per y-row. Median over rows gives the typical x spread.
+    spread_along_x = np.nanmax(z, axis=1) - np.nanmin(z, axis=1)  # length n_y
+    spread_along_y = np.nanmax(z, axis=0) - np.nanmin(z, axis=0)  # length n_x
+    return SweepSensitivity(
+        total_spread=total,
+        relative_spread=rel,
+        axis_spread_x=float(np.nanmedian(spread_along_x)),
+        axis_spread_y=float(np.nanmedian(spread_along_y)),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Grid expansion + backend selection
 # ---------------------------------------------------------------------------
@@ -280,7 +355,9 @@ __all__ = [
     "SWEEPABLE_VARIABLES",
     "SweepAxis",
     "SweepResult",
+    "SweepSensitivity",
     "SweepSpec",
+    "compute_sensitivity",
     "expand_grid",
     "pick_backend",
 ]

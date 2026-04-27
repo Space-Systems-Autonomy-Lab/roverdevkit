@@ -37,6 +37,7 @@ from roverdevkit.tradespace.sweeps import (
     SWEEPABLE_VARIABLES,
     SweepAxis,
     SweepSpec,
+    compute_sensitivity,
 )
 from webapp.backend.loaders import (
     get_canonical_scenarios,
@@ -44,7 +45,7 @@ from webapp.backend.loaders import (
     get_quantile_bundles,
     get_soil_for_simulant,
 )
-from webapp.backend.schemas import SweepRequest, SweepResponse
+from webapp.backend.schemas import SweepRequest, SweepResponse, SweepSensitivityOut
 from webapp.backend.services.sweep import run_sweep
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,8 @@ def _cached_sweep(_request_key: str, req_json: str) -> SweepResponse:
 
     used_scm_correction = result.backend_used == "evaluator" and correction is not None
 
+    sens = compute_sensitivity(result)
+
     return SweepResponse(
         target=spec.target,
         scenario_name=req.scenario_name,
@@ -166,6 +169,12 @@ def _cached_sweep(_request_key: str, req_json: str) -> SweepResponse:
         used_scm_correction=used_scm_correction,
         n_cells=spec.n_cells(),
         elapsed_ms=result.elapsed_s * 1000.0,
+        sensitivity=SweepSensitivityOut(
+            total_spread=sens.total_spread,
+            relative_spread=sens.relative_spread,
+            axis_spread_x=sens.axis_spread_x,
+            axis_spread_y=sens.axis_spread_y,
+        ),
     )
 
 

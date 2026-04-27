@@ -35,4 +35,4 @@ def test_version_returns_metadata(client: TestClient) -> None:
         "quantile_bundles_path",
     }
     assert body["api_version"] == "0.1.0"
-    assert body["dataset_version"] == "v4"
+    assert body["dataset_version"] == "v5"

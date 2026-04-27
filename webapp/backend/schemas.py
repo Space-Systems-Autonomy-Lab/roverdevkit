@@ -45,6 +45,7 @@ __all__ = [
     "SweepAxisIn",
     "SweepRequest",
     "SweepResponse",
+    "SweepSensitivityOut",
     "ThermalDiagnosticOut",
     "VersionResponse",
 ]
@@ -376,6 +377,23 @@ class SweepRequest(BaseModel):
     backend: Literal["auto", "evaluator", "surrogate"] = "auto"
 
 
+class SweepSensitivityOut(BaseModel):
+    """Mirror of :class:`roverdevkit.tradespace.sweeps.SweepSensitivity`.
+
+    All values share the units of the swept target metric. ``relative_spread``
+    is dimensionless: the absolute spread divided by the larger of
+    ``|max|``, ``|min|``, ε. Frontend uses it to decide whether the metric
+    is effectively flat across the grid.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    total_spread: float
+    relative_spread: float
+    axis_spread_x: float
+    axis_spread_y: float | None
+
+
 class SweepResponse(BaseModel):
     """Sweep grid + the values matrix + provenance.
 
@@ -404,3 +422,8 @@ class SweepResponse(BaseModel):
 
     n_cells: int
     elapsed_ms: float
+
+    sensitivity: SweepSensitivityOut
+    """Per-axis spread of the swept metric. Drives the inline sensitivity
+    hint under the chart so users can tell at a glance when a metric is
+    saturated on the chosen grid or when one axis dominates the other."""

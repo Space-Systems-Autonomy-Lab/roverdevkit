@@ -4,6 +4,7 @@ import { Play } from "lucide-react";
 import { RegistryOverlayPicker } from "@/components/registry-overlay-picker";
 import { SweepChart } from "@/components/sweep-chart";
 import { SweepConfig } from "@/components/sweep-config";
+import { SweepSensitivityHint } from "@/components/sweep-sensitivity-hint";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -107,7 +108,10 @@ export function ParametricSweep() {
               {errorMessage}
             </p>
           ) : sweep.data ? (
-            <SweepChart data={sweep.data} overlayRovers={selectedRovers} />
+            <>
+              <SweepChart data={sweep.data} overlayRovers={selectedRovers} />
+              <SweepSensitivityHint data={sweep.data} />
+            </>
           ) : (
             <p className="text-sm text-[var(--color-muted-foreground)]">
               No sweep has been run yet.

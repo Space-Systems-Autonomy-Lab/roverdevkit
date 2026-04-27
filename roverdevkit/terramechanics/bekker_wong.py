@@ -43,8 +43,11 @@ Assumptions
   c₁ = 0.4, c₂ = 0.2. These are Wong's typical empirical defaults;
   Ding 2011 reports soil-dependent fits spanning c₁ ∈ [0.18, 0.43],
   c₂ ∈ [0.09, 0.25]. Residuals go into the Path-2 correction layer.
-- Grousers ignored here; their contribution is picked up by the
-  PyChrono SCM track of the data-generation strategy.
+- Grousers contribute a multiplicative shear-thrust lift derived
+  from Iizuka & Kubota 2011 (see ``_grouser_shear_lift``). The term
+  is closed-form in (R, N_g, h_g) and saturates at large grouser
+  packs; residuals against PyChrono SCM are absorbed by the Path-2
+  correction layer.
 
 Validation roadmap (see ``data/validation/README.md``)
 ------------------------------------------------------
@@ -74,6 +77,14 @@ _C2_THETA_M: float = 0.2
 # integration error well below the ±15-30 % model-form error of
 # Bekker-Wong. Profiled at ~0.3 ms per evaluation.
 _N_QUAD: int = 100
+
+# Saturation cap for the grouser shear-thrust lift, dimensionless. Lab
+# data from Iizuka & Kubota 2011 (Fig. 7-9, GRC-1 / FJS-1) show the
+# tractive coefficient gain plateaus at ~50–60 % once the grouser pack
+# is dense enough that adjacent shear planes interfere. Capping the
+# arc-density form at 0.6 prevents the analytical lift from running
+# unphysically high for extreme N_g · h_g / R combinations.
+_GROUSER_LIFT_CAP: float = 0.6
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +148,45 @@ class WheelForces:
 # ---------------------------------------------------------------------------
 # Internal helpers (all in SI inside)
 # ---------------------------------------------------------------------------
+
+
+def _grouser_shear_lift(wheel: WheelGeometry) -> float:
+    """Engaged-grouser shear-thrust enhancement factor (Iizuka & Kubota 2011).
+
+    Each grouser blade penetrating depth ``h_g`` extends the shear
+    interface from the wheel rim down to ``R + h_g``. The expected
+    number of grousers in contact at any instant is
+
+    .. math::
+
+        N_{\\text{eng}} \\;=\\; \\frac{N_g\\,\\theta_1}{2\\pi},
+
+    i.e. the contact-arc fraction of the full circumference. Each
+    engaged grouser extends the shear plane by ``h_g`` over the bare
+    contact-arc length ``R\\,\\theta_1``, so the multiplicative shear
+    thrust gain is
+
+    .. math::
+
+        g \\;=\\; 1 \\;+\\; \\frac{N_{\\text{eng}}\\,h_g}{R\\,\\theta_1}
+              \\;=\\; 1 \\;+\\; \\frac{N_g\\,h_g}{2\\pi R},
+
+    which is independent of ``θ_1`` (the cancellation is exact). This
+    is the closed-form arc-density limit of Iizuka & Kubota's grouser
+    correction, suitable for analytical sweeps.
+
+    The raw lift is capped at ``_GROUSER_LIFT_CAP`` so the term saturates
+    in the regime where adjacent grouser shear planes interfere — beyond
+    that, more grousers contribute negligibly (Iizuka & Kubota 2011 Fig.
+    7–9). The cap matches their reported ~50–60 % asymptote.
+
+    Returns ``1.0`` when ``N_g = 0`` or ``h_g = 0``; the BW kernel then
+    reduces to the original grouser-blind form bit-for-bit.
+    """
+    if wheel.grouser_count <= 0 or wheel.grouser_height_m <= 0.0:
+        return 1.0
+    arc_density = wheel.grouser_count * wheel.grouser_height_m / (2.0 * math.pi * wheel.radius_m)
+    return 1.0 + min(arc_density, _GROUSER_LIFT_CAP)
 
 
 def _effective_modulus_pa_per_m_n(soil: SoilParameters, width_m: float) -> float:
@@ -267,6 +317,16 @@ def _integrate_forces(
     # braking (j < 0) cases with a single expression.
     tau_max = cohesion_pa + sigma * math.tan(phi_rad)
     tau = tau_max * (1.0 - np.exp(-np.abs(j) / shear_modulus_m)) * np.sign(j)
+
+    # -----------------------------------------------------------------
+    # Grouser shear-thrust lift   (Iizuka & Kubota 2011)
+    # -----------------------------------------------------------------
+    # Multiplicative gain on τ from grousers extending the shear plane
+    # below the wheel rim. Independent of θ in this closed-form limit,
+    # so it scales W, DP, and T together. Reduces to 1.0 when the wheel
+    # has no grousers; saturates at _GROUSER_LIFT_CAP for very dense
+    # grouser packs. See ``_grouser_shear_lift`` for the derivation.
+    tau = tau * _grouser_shear_lift(wheel)
 
     # -----------------------------------------------------------------
     # Force integrals   (Wong 2008 §4.2)

@@ -66,7 +66,7 @@ from roverdevkit.surrogate.sampling import LHSSample
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = "v4"
+SCHEMA_VERSION = "v5"
 """Bump when the column schema or training distribution changes so
 downstream code can detect stale Parquet files. Written into Parquet
 file-level metadata.
@@ -93,7 +93,19 @@ History
   bump signals the corrected mobility physics so a v3-trained
   surrogate isn't silently reused on v4 data. Promotion was gated
   by the Week-7.5 sign-flip gate (``reports/week7_5_gate``) and the
-  Week-7.7 BW-vs-SCM-direct bake-off (``reports/week7_7_bakeoff``)."""
+  Week-7.7 BW-vs-SCM-direct bake-off (``reports/week7_7_bakeoff``).
+- v5 (Week 11 step 2, 2026-04-27): rebuild after the Bekker-Wong kernel
+  gained the Iizuka & Kubota 2011 grouser shear-thrust term (see
+  ``_grouser_shear_lift`` in ``roverdevkit/terramechanics/bekker_wong.py``).
+  Column schema is byte-identical to v4; the bump signals the
+  grouser-aware analytical kernel — a v4-trained surrogate is grouser-
+  blind and would systematically under-predict slope capability and
+  drawbar pull / driving torque on grousered designs. Median shifts
+  on the LHS marginal: slope_capability_deg +33 % relative
+  (~+2.6 deg), peak_motor_torque_nm ~+14 %, energy_margin_raw_pct
+  ~-15 % (more torque demand at the same forward force). Triggered
+  by the Week-11 sweep-tool finding that grouser_height_m and
+  grouser_count had no effect on slope capability."""
 
 DEFAULT_FIDELITY = "analytical"
 

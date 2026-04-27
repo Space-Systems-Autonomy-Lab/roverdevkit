@@ -23,10 +23,13 @@ import time
 
 import pytest
 
+from roverdevkit.mission.capability import max_climbable_slope_deg
 from roverdevkit.terramechanics.bekker_wong import (
+    _GROUSER_LIFT_CAP,
     SoilParameters,
     WheelForces,
     WheelGeometry,
+    _grouser_shear_lift,
     _integrate_forces,
     single_wheel_forces,
 )
@@ -227,6 +230,101 @@ def test_rashid_class_sinkage_and_dp_are_plausible(
     )
     assert forces.drawbar_pull_n > 0.0
     assert 0.0 < forces.driving_torque_nm < 10.0
+
+
+# ---------------------------------------------------------------------------
+# Grouser shear-thrust lift (Iizuka & Kubota 2011)
+# ---------------------------------------------------------------------------
+
+
+def test_grouser_lift_is_unity_when_no_grousers() -> None:
+    """No grouser height or zero count ⇒ lift factor exactly 1.0."""
+    smooth = WheelGeometry(radius_m=0.10, width_m=0.10, grouser_height_m=0.0, grouser_count=14)
+    no_count = WheelGeometry(radius_m=0.10, width_m=0.10, grouser_height_m=0.012, grouser_count=0)
+    assert _grouser_shear_lift(smooth) == 1.0
+    assert _grouser_shear_lift(no_count) == 1.0
+
+
+def test_grouser_lift_matches_arc_density_formula() -> None:
+    """Closed form: lift = 1 + N_g · h_g / (2π·R) (uncapped regime)."""
+    import math as _math
+
+    wheel = WheelGeometry(radius_m=0.10, width_m=0.10, grouser_height_m=0.005, grouser_count=14)
+    expected = 1.0 + 14 * 0.005 / (2.0 * _math.pi * 0.10)
+    assert _grouser_shear_lift(wheel) == pytest.approx(expected, rel=1e-12)
+
+
+def test_grouser_lift_saturates_at_cap() -> None:
+    """Very dense grouser pack ⇒ lift saturates at 1 + _GROUSER_LIFT_CAP."""
+    extreme = WheelGeometry(radius_m=0.05, width_m=0.10, grouser_height_m=0.020, grouser_count=120)
+    assert _grouser_shear_lift(extreme) == pytest.approx(1.0 + _GROUSER_LIFT_CAP, rel=1e-12)
+
+
+def test_smooth_wheel_baseline_unchanged_after_grouser_term(
+    nominal_soil: SoilParameters,
+) -> None:
+    """Adding the grouser term must not perturb wheels with no grousers.
+
+    Pins the BW kernel to its pre-grouser-term outputs for a smooth
+    wheel — guards against accidentally scaling τ when the lift factor
+    should be exactly 1.0.
+    """
+    smooth = WheelGeometry(radius_m=0.10, width_m=0.10, grouser_height_m=0.0, grouser_count=0)
+    f = single_wheel_forces(smooth, nominal_soil, vertical_load_n=40.0, slip=0.6)
+    assert f.drawbar_pull_n == pytest.approx(11.786, abs=0.05)
+    assert f.driving_torque_nm == pytest.approx(2.349, abs=0.02)
+    assert f.sinkage_m == pytest.approx(0.01779, abs=1e-4)
+
+
+def test_drawbar_pull_monotone_in_grouser_height(
+    loose_soil: SoilParameters,
+) -> None:
+    """Taller grousers ⇒ more shear thrust on loose soil at fixed slip."""
+    heights_m = [0.000, 0.005, 0.010, 0.015, 0.020]
+    dps = []
+    for h in heights_m:
+        wheel = WheelGeometry(radius_m=0.10, width_m=0.10, grouser_height_m=h, grouser_count=14)
+        dps.append(single_wheel_forces(wheel, loose_soil, vertical_load_n=40.0, slip=0.6).drawbar_pull_n)
+    for a, b in zip(dps[:-1], dps[1:], strict=True):
+        assert b > a, f"DP must strictly increase with h_g, got {dps}"
+
+
+def test_drawbar_pull_monotone_then_saturates_in_grouser_count(
+    loose_soil: SoilParameters,
+) -> None:
+    """More grousers ⇒ more shear thrust, with saturation at the cap."""
+    counts = [0, 4, 8, 14, 24, 36, 60, 120]
+    dps = []
+    for n in counts:
+        wheel = WheelGeometry(radius_m=0.10, width_m=0.10, grouser_height_m=0.012, grouser_count=n)
+        dps.append(single_wheel_forces(wheel, loose_soil, vertical_load_n=40.0, slip=0.6).drawbar_pull_n)
+    # Strictly rising in the unsaturated regime (counts up to where the
+    # cap clamps in — at R=0.10, h=0.012 m the cap is reached around N_g ≈ 32):
+    for a, b in zip(dps[:4], dps[1:5], strict=True):
+        assert b > a, f"DP must strictly increase with N_g pre-saturation, got {dps}"
+    # Once saturated, additional grousers must not decrease DP and must
+    # be effectively flat (same lift factor of 1 + cap):
+    assert dps[-1] == pytest.approx(dps[-2], rel=1e-3)
+
+
+def test_slope_capability_picks_up_grouser_signal(
+    nominal_soil: SoilParameters,
+) -> None:
+    """End-to-end: max_climbable_slope_deg now responds to grouser geometry.
+
+    Pre-fix this test would have shown identical slope across grouser
+    height — the regression we are fixing.
+    """
+    smooth = WheelGeometry(radius_m=0.10, width_m=0.10, grouser_height_m=0.0, grouser_count=14)
+    grousered = WheelGeometry(
+        radius_m=0.10, width_m=0.10, grouser_height_m=0.015, grouser_count=14
+    )
+    s_smooth = max_climbable_slope_deg(smooth, nominal_soil, total_mass_kg=24.0, n_wheels=6)
+    s_grousered = max_climbable_slope_deg(grousered, nominal_soil, total_mass_kg=24.0, n_wheels=6)
+    # Expect at least 3° lift from h_g = 15 mm at R = 10 cm; arc-density
+    # form gives ≈ 33% shear lift here, which historically maps to
+    # 5–8° slope-capability gain on Apollo nominal regolith.
+    assert s_grousered - s_smooth > 3.0
 
 
 # ---------------------------------------------------------------------------
