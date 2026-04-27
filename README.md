@@ -35,7 +35,16 @@ research framing.
    evaluator that serves as an inner-loop accelerator for NSGA-II, the home for
    calibrated 90 % prediction intervals (quantile XGBoost), and the reference
    baseline for the post-semester benchmark release.
-4. Validation that the optimizer rediscovers the design points of real lunar
+4. **An interactive browser-based tradespace exploration tool**
+   (`webapp/`, Phase 3) — FastAPI backend + React + shadcn/ui front end —
+   that exposes the corrected evaluator and the surrogate / quantile heads
+   through a paper-quality UI: single-design "what-if" with PIs, parametric
+   sweeps, probabilistic constraint feasibility, custom-objective NSGA-II
+   with live SSE progress, registry-rover overlays, surrogate-vs-evaluator
+   backend toggle, SHAP per-target sensitivity, and reproducible permalinks.
+   Dockerized for local-first use; hostable on HF Spaces / Fly.io with no
+   code changes.
+5. Validation that the optimizer rediscovers the design points of real lunar
    micro-rovers within stated tolerances when given matching mission
    constraints, plus SHAP-based interpretable design rules.
 
@@ -53,6 +62,12 @@ Design Vector → Mission Evaluator (BW + wheel-level SCM correction)
                               ▼
                 Tradespace: sweeps · NSGA-II · SHAP
                 (evaluator-direct for ≤10k points; surrogate above)
+                              │
+                              ▼
+              webapp/  —  React + shadcn/ui  ←→  FastAPI
+              (Phase 3: interactive design panel, sweeps,
+               probabilistic feasibility, custom-objective
+               NSGA-II with SSE, registry overlays)
 ```
 
 See [`project_plan.md` §2](project_plan.md) for the full system diagram and
@@ -69,9 +84,12 @@ roverdevkit/
 │   ├── mass/             # Parametric mass-estimating relationships
 │   ├── mission/          # Evaluator, scenarios, traverse simulator
 │   ├── surrogate/        # Training, models, features, uncertainty
-│   ├── tradespace/       # Sweeps, NSGA-II, SHAP, visualization
-│   └── validation/       # Rediscovery test, experimental comparison, error budget
-├── notebooks/         # Interactive exploration & paper-reproduction notebooks
+│   ├── tradespace/       # Sweeps, NSGA-II, SHAP, static figures
+│   └── validation/       # Rediscovery test, registry, cross-scenario
+├── webapp/            # Phase-3 browser-based tradespace tool
+│   ├── backend/          # FastAPI + Pydantic + SSE
+│   └── frontend/         # React 19 + Vite + TS + shadcn/ui + Plotly
+├── notebooks/         # Real-rover validation + paper-figure regen only
 ├── pretrained/        # Packaged surrogate models
 └── tests/             # pytest test suite
 ```
@@ -109,6 +127,40 @@ pip install -e ".[dev]"
 
 The project is designed so that Path 1 alone is sufficient to produce a
 publishable result ([`project_plan.md` §5](project_plan.md)).
+
+## Try the tool (Phase 3, in-progress)
+
+A browser-based tradespace exploration tool ships in `webapp/` (FastAPI +
+React + shadcn/ui + Plotly). It runs locally and is dockerized for future
+hosting (HF Spaces, Fly.io, Duke container).
+
+```bash
+# Local dev (requires Python env above + Node 20 LTS):
+cd webapp
+docker compose up                # backend on :8000, frontend on :5173
+
+# Or, hot-reload natively:
+( cd backend  && uvicorn app:app --reload --port 8000 ) &
+( cd frontend && npm install && npm run dev )
+```
+
+Capabilities (delivered week-by-week through Phase 3):
+
+- single-design panel with calibrated 90 % prediction intervals;
+- 1-D / 2-D parametric sweeps with registry-rover overlays;
+- probabilistic constraint-feasibility heatmaps (P(feasible | design));
+- custom-objective NSGA-II with **live SSE-streamed progress** (set your
+  own objectives, constraints, and scenario, watch the Pareto front fill in);
+- interactive Pareto explorer with click-to-drill;
+- rediscovery view: optimize at a real rover's mission constraints, see
+  how close the optimizer lands;
+- backend toggle (mission-level surrogate vs corrected evaluator) with
+  side-by-side residuals;
+- SHAP per-target sensitivity on demand;
+- URL-encoded permalinks and CSV / JSON export.
+
+See [`webapp/README.md`](webapp/README.md) for the dev quickstart, deploy
+options, and the schema for adding new endpoints / pages.
 
 ## Development
 

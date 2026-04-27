@@ -80,3 +80,13 @@ logs/
 # Project-specific scratch
 scratch/
 tmp/
+
+# Phase-3 webapp build / install artifacts
+webapp/frontend/node_modules/
+webapp/frontend/dist/
+webapp/frontend/.vite/
+webapp/frontend/coverage/
+webapp/frontend/playwright-report/
+webapp/frontend/test-results/
+webapp/backend/.coverage
+webapp/.env.local

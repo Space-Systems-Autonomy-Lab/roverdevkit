@@ -2752,3 +2752,149 @@ silently rotting further as Phase 3 (Weeks 10-12) lands new code.
 **Next.** Phase 3, Week 10 — tradespace sweep tool with
 `backend: Literal["evaluator", "surrogate"]` switch, default
 evaluator for ≤10k points, surrogate for batch / NSGA-II.
+
+---
+
+## 2026-04-26 — Phase 3 reframed: FastAPI + React browser-based tradespace tool
+
+**What changed.** Phase 3 (Weeks 10-12) is no longer scoped as
+"sweep CLI + NSGA-II notebook + SHAP analysis." It is now an
+**interactive browser-based tradespace exploration tool** delivered as
+a dockerized FastAPI + React web application. The Python core
+(`roverdevkit.tradespace.{sweeps,optimizer,design_rules}`) still backs
+both notebook / CLI and web surfaces, so logic does not fork.
+
+**Why now.** Two reasons.
+1. The post-W7.7 corrected evaluator (~40 ms / mission, ~5 ms on 8
+   cores) plus the W8 step-4 calibrated quantile heads (90 % PIs in
+   sub-ms inference) make a *fast, probabilistic, paper-quality
+   interactive UI* genuinely feasible — the Python work to enable
+   this has now landed.
+2. The methodology paper's headline figure becomes much stronger as a
+   live interactive tool than as a static Pareto plot. A reviewer who
+   loads Pragyan's mission constraints, clicks "compute Pareto," and
+   watches the front fill in is far more convinced than a reviewer who
+   reads the same numbers in a table. This is the sharpest move to
+   strengthen Paper 1's tradespace section without new science.
+
+**Stack (decided).**
+
+- **Backend:** FastAPI + Pydantic v2 + Uvicorn + `sse-starlette`. SSE
+  for streaming NSGA-II progress. In-memory job store with TTL.
+  `httpx` for tests. The Python core is imported in-process — no
+  separate service boundary.
+- **Frontend:** React 19 + Vite + TypeScript + shadcn/ui (Radix +
+  Tailwind) + Plotly.js (`react-plotly.js`). TanStack Query for API
+  state, Zustand for local UI state, TanStack Router for routing.
+- **Deploy:** multi-stage Dockerfile (FE build → static, Uvicorn
+  serves API + FE static at runtime). `docker-compose.yml` for local
+  dev. Local-first; HF Spaces / Fly.io / Duke container later — no
+  code change required.
+
+**Stack alternatives considered and rejected.**
+
+- *Streamlit* — fastest path, but the user explicitly asked for a
+  "good interface" and live custom Pareto runs; Streamlit's rerun
+  model would be awkward for both. Acknowledged in the discussion.
+- *Plotly Dash* — better callback model than Streamlit, paper-grade
+  plots, but ~2× the boilerplate of FastAPI + React for the same
+  ceiling. Not worth it once we committed to a real frontend.
+- *Svelte / SvelteKit* — smaller bundle, nicer DX, but a future
+  maintainer is more likely to know React, and the shadcn ecosystem
+  is React-only.
+- *HTMX + Jinja2* — fast to develop, but the constrained
+  interactivity (no live Plotly updates, awkward Pareto explorer) does
+  not meet the "good interface" bar.
+
+**Capabilities (12-step decomposition over Weeks 10-12).** See
+`project_plan.md` §6 Phase 3 for full detail; summary here.
+
+| Wk | Step | Deliverable |
+|----|------|-------------|
+| 10 | 1 | FastAPI backend skeleton (`/predict`, `/registry`, `/scenarios`, `/healthz`) + cached loaders + httpx tests |
+| 10 | 2 | React + Vite + shadcn frontend scaffold + routing + Zustand store |
+| 10 | 3 | Single-design panel under `/design` with sliders + PIs + registry overlay |
+| 10 | 4 | `/api/evaluate` ground-truth endpoint + UI backend toggle (surrogate vs corrected evaluator) |
+| 11 | 1 | `/api/sweep` + UI sweep page with Plotly heatmap + registry overlay |
+| 11 | 2 | `/api/feasibility` (P(feasible) from quantile heads) + UI constraint dashboard |
+| 11 | 3 | NSGA-II runner + in-memory job store + `/api/optimize` POST + SSE progress + result endpoint |
+| 11 | 4 | "Compute Pareto" UI form + progress modal subscribed to SSE + cancel button |
+| 12 | 1 | Interactive Pareto explorer + click-to-drill + compare-two-points |
+| 12 | 2 | `/validate/rediscovery` page (headline paper figure) + Pareto-front evaluator-validation pass |
+| 12 | 3 | SHAP page (per-target importance + per-design waterfall) |
+| 12 | 4 | Case-study presets, URL permalinks, CSV / JSON export |
+| 12 | 5 | Multi-stage Dockerfile + docker-compose + webapp README + 90 s screencast |
+
+**Risk + scope-cut order if Week 12 slips:** screencast → "compare two
+points" → SHAP page (paper figure can come from `design_rules.py`) →
+probabilistic feasibility (revert to deterministic classifier-only).
+The rediscovery view (Week 12 step 2) and the deploy story
+(Week 12 step 5) are non-negotiable — they are the paper figure and
+the credibility play.
+
+**Custom-Pareto answer (user requirement).** End users can configure
+arbitrary objective subsets, constraint thresholds, and scenario
+families through the `/pareto` form, which `POST`s to `/api/optimize`,
+gets back a `job_id`, and subscribes to `/api/optimize/{id}/stream`
+for per-generation checkpoints (gen, hypervolume, Pareto-front size,
+best-per-objective). Power-user toggle for evaluator-fitness mode
+(capped at 500 evaluations to keep wall-clock sub-minute).
+
+**Optimization-fitness backend policy.** Surrogate by default
+(sub-ms per fitness eval, used in NSGA-II inner loop); evaluator
+fitness available as a power-user toggle, capped at 500 evaluations,
+intended for "verify a corner of the Pareto front against the truth"
+runs rather than headline computation.
+
+**Plan / doc edits in this entry.**
+
+- `project_plan.md` §1: added the webapp as core contribution #4 and
+  renumbered the rediscovery item to #5.
+- `project_plan.md` §2: replaced the bottom "tradespace exploration
+  layer" architecture box to show both the Python core and the new
+  webapp layer with its capabilities.
+- `project_plan.md` §6 Phase 3: replaced the three Week 10/11/12
+  bullet blocks with the 12-step decomposition above, including
+  stack-decision preface, acceptance criteria, and the risk + scope-
+  cut order.
+- `project_plan.md` §10 software architecture: added `webapp/`
+  subtree (`backend/{app.py,schemas.py,loaders.py,jobs.py,deps.py,
+  routes/}`, `frontend/src/{routes,components,hooks,lib,store,types}`,
+  `Dockerfile`, `docker-compose.yml`); trimmed
+  `notebooks/01_interactive_exploration.ipynb` and
+  `02_pareto_fronts.ipynb` since the webapp subsumes them; kept
+  `00_real_rover_validation.ipynb`,
+  `03_rediscover_real_rovers.ipynb`,
+  `04_reproduce_paper.ipynb`.
+- `project_plan.md` §11.1 Paper 1: added Key Result 5 (interactive
+  tool) to the abstract; promoted the tool to contribution #4 and
+  bumped rediscovery to #5; added §7.5 covering the tool to the paper
+  outline.
+- `project_plan.md` §11.2 Paper 2: noted the webapp chrome can be
+  reused as the leaderboard browse / per-submission inspection UI.
+- `project_plan.md` §12 dependencies: added FastAPI, Uvicorn,
+  sse-starlette, httpx, Node 20 LTS, Docker rows.
+- `project_plan.md` §13 milestones: rewrote Week 10 / 11 / 12 lines
+  to reflect the webapp deliverables.
+- `README.md`: added the webapp to core contributions, the
+  architecture box, the repository layout, and a new "Try the tool"
+  section with `docker compose` / native dev quickstarts and the
+  capability list.
+- `pyproject.toml`: added a `[webapp]` optional-dependencies extra
+  (fastapi, uvicorn[standard], sse-starlette, httpx, python-
+  multipart).
+- `.gitignore`: added `webapp/frontend/{node_modules,dist,.vite,
+  coverage,playwright-report,test-results}`,
+  `webapp/backend/.coverage`, `webapp/.env.local`.
+- This log entry.
+
+**Out of scope for this entry.** No code shipped. Week 10 step 1
+(FastAPI skeleton) is the next concrete work. Pre-W10 readiness: the
+W8 step-4 quantile bundles (`reports/week8_intervals_v4/
+quantile_bundles.joblib`), the W8 step-3 tuned XGB models, the
+corrected evaluator, and the registry / truth table are all already
+in place from Phase 2.
+
+**Next.** Phase 3, Week 10, step 1 — FastAPI backend skeleton with
+`/api/predict`, `/api/registry`, `/api/scenarios`, `/api/healthz`,
+cached loaders, and httpx tests.

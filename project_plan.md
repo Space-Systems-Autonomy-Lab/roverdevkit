@@ -14,7 +14,8 @@
 1. An open-source, fully-documented mission evaluator for lunar micro-rovers that takes a design vector and a mission profile and returns mission-level performance metrics (traverse range, energy margin, slope capability, mass) with every sub-model traceable to a cited source. After the Week-7.7 traverse-loop optimisation the corrected evaluator runs in ~40 ms / mission on a single core (~5 ms on 8 cores), making most Phase-3 workflows feasible without an outer surrogate.
 2. A **wheel-level multi-fidelity correction model** (`roverdevkit.terramechanics.correction_model.WheelLevelCorrection`) that learns the Δ between Bekker-Wong analytical wheel forces and PyChrono SCM's higher-fidelity contact model from a small (~500-row) SCM single-wheel sweep, then composes back into the analytical traverse loop at every wheel-force step. This is the methodological centrepiece: it is what makes the evaluator multi-fidelity at millisecond cost.
 3. A mission-level XGBoost / MLP surrogate over the corrected evaluator (Phase 2) that serves as (a) an inner-loop accelerator for the Phase-3 NSGA-II constraint search, (b) the home for calibrated prediction intervals (Week-8 step-4), and (c) the reference baseline for the Phase-5 benchmark release. The surrogate is *not* the headline contribution — the corrected evaluator is fast enough on its own for most workflows; the surrogate adds probabilistic feasibility, uncertainty quantification, and bulk inference at large batch sizes.
-4. Validation that the optimizer rediscovers the design points of real lunar micro-rovers (Rashid, Pragyan, Yutu-class) within stated tolerances when given matching mission constraints, plus interpretable design rules extracted via SHAP that generalize across mission profiles.
+4. **An interactive browser-based tradespace exploration tool** (`webapp/`) that exposes the corrected evaluator and the surrogate / quantile heads through a FastAPI backend and a React + shadcn/ui front end. Single-design "what-if" predictions with calibrated 90 % PIs, 1-D / 2-D parametric sweeps, probabilistic constraint-feasibility heatmaps, custom-objective NSGA-II Pareto exploration with live SSE progress, registry-rover overlays, surrogate-vs-evaluator backend toggle, SHAP per-target sensitivity, and reproducible permalinks. Local-first via Docker today; trivially hostable on Hugging Face Spaces / Fly.io / a Duke container later. This is the Phase-3 deliverable and the headline figure / supplementary screencast for Paper 1.
+5. Validation that the optimizer rediscovers the design points of real lunar micro-rovers (Rashid, Pragyan, Yutu-class) within stated tolerances when given matching mission constraints, plus interpretable design rules extracted via SHAP that generalize across mission profiles.
 
 **Why this is novel:** Existing rover surrogate work is almost entirely component-level (single wheel, single subsystem). System-level rover trade studies exist but are either proprietary (JPL Team X, ESA CDF) or use static spreadsheet models without ML. The novel piece here is the **wheel-level correction architecture** — a small ML model trained on cheap SCM single-wheel runs that composes into an analytical mission-level loop, lifting the whole stack to multi-fidelity without ever running SCM in the inner loop. No open-source tool combines a physics-based mission evaluator with that correction architecture and validation against real flown rovers. The "rediscover Rashid/Pragyan" validation is a concrete, falsifiable claim that's rare in this literature.
 
@@ -91,12 +92,18 @@
 ┌────────────────────────────────────────────────────────────────┐
 │              TRADESPACE EXPLORATION LAYER                       │
 │                                                                 │
-│  - Parametric sweeps (corrected evaluator on 8 cores; surrogate │
-│    only when batch > 50k or PIs are required)                   │
-│  - NSGA-II inner loop on surrogate, Pareto-front validation     │
-│    against the corrected evaluator                              │
-│  - SHAP-based design rule extraction                            │
-│  - Mission scenario library (polar, equatorial, mare, highland) │
+│  Python core (roverdevkit.tradespace):                         │
+│    • Parametric sweeps with backend dispatch (evaluator / surr.)│
+│    • NSGA-II runner (pymoo) with per-generation checkpoints     │
+│    • SHAP / PDP design-rule extraction                          │
+│    • Mission scenario library (polar, equatorial, mare, highland)│
+│                                                                 │
+│  Browser tool (webapp/, Phase 3):                              │
+│    React + shadcn/ui SPA  ←→  FastAPI backend (uvicorn)        │
+│      design-panel  /  sweep  /  feasibility  /  pareto         │
+│      backend toggle (surrogate vs corrected evaluator)         │
+│      SSE-streamed NSGA-II progress + custom constraint sets    │
+│      rediscovery validation  /  SHAP  /  permalink export      │
 └────────────────────────────────────────────────────────────────┘
 ```
 
@@ -272,32 +279,44 @@ The decision and its evidence go in `project_log.md`.
 
 ### Phase 3: Tradespace Tool (Weeks 10–12)
 
-The post-W7.7 reframe (corrected evaluator at ~40 ms / mission, ~5 ms on 8 cores) means Phase 3 uses **two backends side-by-side** rather than treating the surrogate as the only fast path:
+Phase 3 ships an **interactive browser-based tradespace exploration tool** (`webapp/`) on top of the corrected evaluator and the surrogate. The post-W7.7 reframe (corrected evaluator at ~40 ms / mission, ~5 ms on 8 cores) means the tool uses **two backends side-by-side**: the corrected evaluator is the source of truth and the default for single-design queries and ≤10 k-point sweeps; the surrogate is invoked for bulk sweeps (>50 k points), NSGA-II inner-loop fitness, probabilistic feasibility, and prediction-interval visualisation. The same Python core (`roverdevkit.tradespace.{sweeps,optimizer,design_rules}`) backs both notebook / CLI workflows and the webapp, so logic doesn't fork between surfaces.
 
-- **Corrected evaluator** is the source of truth and the default for any workload that fits in its budget — interactive sweeps up to ~10k points, NSGA-II Pareto-front *validation*, real-rover replays, sensitivity studies on `MassModelParams`. Roughly 80 s for a 100k-point grid on 8 cores.
-- **Mission-level surrogate** is invoked when (a) batch size > 50k (1M-point sensitivity grids, large-scale Sobol), (b) NSGA-II inner-loop fitness function (≈20-30k evaluations × 200 generations across 4 scenarios), (c) probabilistic feasibility is required (NSGA-II constraint layer with calibrated AUC), or (d) prediction intervals are part of the answer (Pareto-front uncertainty bands).
+**Stack (decided 2026-04-26):**
+- Backend: **FastAPI + Pydantic v2 + Uvicorn**. SSE for streaming NSGA-II progress (`sse-starlette`); in-memory job store with TTL; `httpx` for tests; Python core imported in-process.
+- Frontend: **React 19 + Vite + TypeScript + shadcn/ui (Radix + Tailwind) + Plotly.js (`react-plotly.js`)**, with **TanStack Query** for API state and **Zustand** for local UI state. TanStack Router for routing.
+- Deploy: multi-stage Dockerfile (FE build → static, Uvicorn serves API and FE static at runtime). `docker-compose.yml` for local dev. Local-first now; HF Spaces / Fly.io / Duke container later — no code change required.
 
-The same code path can dispatch to either backend so notebooks and CLIs don't fork.
+**Acceptance for Phase 3:** the registry rovers (Pragyan, Yutu-2, MoonRanger, Rashid-1) load as case-study presets, every primary panel renders for each rover with both surrogate and evaluator backends, and a custom-NSGA-II run for at least one scenario completes through the SSE pipeline with a Pareto front a reviewer can drill into.
 
-**Week 10: Parametric sweeps and constraint handling.**
-- Build the sweep engine with a `backend: Literal["evaluator", "surrogate"]` switch (default: `"evaluator"` for ≤10k points, `"surrogate"` above). Both produce identical column schemas so downstream visualisations don't care which backend ran.
-- Implement constraint checking: motor torque limits, mass budget, volume envelope, slope capability minimums. Constraint evaluation uses the feasibility classifier on the surrogate path (probabilistic) and `motor_torque_ok` on the evaluator path (deterministic).
-- Build interactive Jupyter notebook with widgets for live tradespace exploration; widget-driven point queries hit the evaluator (sub-second latency is fine), bulk sweeps for the heatmap views hit the surrogate.
-- **Deliverable:** `tradespace/sweeps.py` (with both backends) + `notebooks/01_interactive_exploration.ipynb`.
+**Week 10 — FastAPI backend MVP, frontend scaffolding, and the single-design panel.**
 
-**Week 11: NSGA-II optimization.**
-- Wrap pymoo NSGA-II around the **surrogate** as the inner-loop fitness function (median XGBoost predictions for objectives, classifier for the feasibility constraint). Three-objective Pareto: maximize range, minimize mass, maximize slope capability. Constraints from week 10.
-- Run for all four mission scenarios.
-- **Pareto-front validation pass.** After NSGA-II converges, re-evaluate every point on the final Pareto front (typically 100-500 points per scenario) with the **corrected evaluator** and report the surrogate-vs-evaluator delta on each objective; any point whose evaluator-true value falls behind a non-Pareto neighbour is flagged. This is the cheap way to inherit the surrogate's speed without inheriting its calibration error on the actual headline result.
-- Generate Pareto front visualizations with surrogate prediction intervals (W8 step-4) as confidence bands.
-- **Deliverable:** Pareto fronts for all four scenarios with the constraint-feasible region highlighted, evaluator-validated against the surrogate on the final fronts, with Pareto-uncertainty bands from the quantile heads.
+- *step 1 (backend skeleton):* `webapp/backend/` — FastAPI `app.py` factory; Pydantic schemas for `DesignVector`, `Scenario`, `Prediction`, `PIBand`, `EvaluateResult`; routes for `/api/predict`, `/api/registry`, `/api/scenarios`, `/api/healthz`. Cached process-local loaders for the v4 dataset, the W8-step-3 tuned XGB models, the W8-step-4 quantile bundles (`reports/week8_intervals_v4/quantile_bundles.joblib`), and the `roverdevkit.validation` registry. CORS configured for the Vite dev server. `pytest` + `httpx` API tests covering shape, schema validation, and registry round-trip.
+- *step 2 (frontend scaffold):* `webapp/frontend/` — Vite + React 19 + TS init; Tailwind + shadcn/ui setup; TanStack Router with the routes the rest of the phase will fill in (`/design`, `/sweep`, `/feasibility`, `/pareto`, `/shap`, `/about`); base layout (sidebar + main + theme toggle); TanStack Query provider; Zustand store with the active design vector + scenario + overlays; `.env.development` proxy to `http://localhost:8000`.
+- *step 3 (single-design panel):* `/design` page — sliders + categorical dropdowns for the 5 + 1 inputs, scenario selector, overlay multi-select for the registry rovers; calls `/api/predict` on every change (debounced); renders predictions + 90 % PIs as a per-target Plotly bullet chart with truth-vs-predicted markers when an overlay is active. Vitest smoke for the design-panel component + a Playwright headless-browser smoke for "load page → change a slider → see predictions update."
+- *step 4 (backend toggle + ground-truth):* `/api/evaluate` runs the corrected evaluator on a single design (~40 ms one-shot); UI toggle on the design panel switches between surrogate (live) and "verify with ground truth" (button-triggered single-shot). Side-by-side residual readout. Acceptance: every registry rover renders cleanly under both backends; surrogate-vs-evaluator residuals on the registry match the W8 step-3 sanity numbers within ±10 %.
 
-**Week 12: Design rules and the rediscovery validation.**
-- SHAP analysis on the trained surrogate. Generate global feature importance and partial dependence plots for the key design variables.
-- Extract interpretable design rules: "below 15 kg total mass, 4-wheel configurations dominate; above, 6-wheel becomes Pareto-optimal because [reason]" — this kind of statement.
-- **The rediscovery test:** Set up the optimizer with constraints matching Rashid's mission (mass budget ≤10 kg, equatorial-ish, short traverse). Does the optimizer produce a design in the neighborhood of actual Rashid? Do the same for Pragyan with its constraints. Plot both real rovers on the Pareto fronts.
-- This is the headline validation result for the paper. If the optimizer's "best" Rashid-class design has wheel diameter within ~30% of actual Rashid, mass within ~25%, and lands on or near the Pareto front, there's a strong story. If it's wildly different, either explain why convincingly (the optimizer found a better design — defend that claim) or debug the evaluator.
-- **Deliverable:** Design rule summary, rediscovery validation plots, packaged tool with README.
+- *Deliverable for Week 10:* a runnable local app (`make webapp-dev` boots BE on `:8000` and FE on `:5173`) with a working design panel under both backends, registry overlays, and the API contracts that Weeks 11-12 build on. Backend test coverage ≥ 80 % on the routes shipped this week.
+
+**Week 11 — Sweeps, probabilistic feasibility, NSGA-II infrastructure.**
+
+- *step 1 (parametric sweeps):* `/api/sweep` endpoint validates a `SweepRequest` (X axis variable, optional Y axis variable, fixed-design dictionary, scenario, backend choice, resolution); the underlying `roverdevkit.tradespace.sweeps.run_sweep` dispatches to evaluator or surrogate per the existing W7.7 / W8 fast paths. Caching keyed on the request hash. UI `/sweep` page with Plotly heatmap, X / Y axis pickers, "use current design as fixed" affordance, and registry overlay markers.
+- *step 2 (probabilistic feasibility):* `/api/feasibility` returns `P(feasibility | design slice)` over a 2-D grid by combining the `motor_torque_ok` classifier with quantile-head margins on `range_km`, `slope_capability_deg`, and `total_mass_kg`. UI `/feasibility` page with editable threshold sidebar (range, slope, motor torque, mass), feasibility heatmap with the registry rovers overlaid, and a one-line "12.3 % of the slice is feasible at 90 % confidence" summary.
+- *step 3 (optimization job infrastructure):* `roverdevkit.tradespace.optimizer.NSGA2Runner` — pymoo NSGA-II with surrogate fitness by default and a power-user toggle for evaluator fitness capped at 500 evaluations; per-generation `OptimizationCheckpoint` callback (`gen, hypervolume, pareto_size, best_per_objective`). Backend `/api/optimize` POST returns a `job_id`; `/api/optimize/{id}/stream` SSE generator yields the checkpoints; `/api/optimize/{id}/result` returns the final Pareto front + design vectors. In-memory `JobStore` with a 30-minute TTL and a `cancel` endpoint. Backend tests with a 1-generation budget for CI.
+- *step 4 (Compute-Pareto UI):* `/pareto` page form — multi-select objectives (the four primary regression targets, with min/max direction), constraint editor reusing the threshold atoms from step 2, scenario picker, NSGA-II budget slider; submit opens a progress modal that subscribes to the SSE stream (gen N / N, current front size, hypervolume sparkline, cancel button). On completion, the user lands on the Pareto-explorer canvas (built in Week 12) prefilled with the result.
+
+- *Deliverable for Week 11:* a sweep page, a probabilistic-feasibility dashboard, and a custom-NSGA-II runner exercised end-to-end in the browser for at least one scenario family. Pre-computed Pareto fronts for the four canonical scenarios written to `reports/phase3_pareto/` so the Week-12 explorer page works even when nobody is running a custom job.
+
+**Week 12 — Pareto explorer, validation views, packaging, deploy.**
+
+- *step 1 (Pareto explorer):* interactive Plotly scatter (or parallel-coordinates when ≥ 4 objectives) with hover-revealed design vectors; click-to-drill into the design panel, prefilled with the chosen Pareto point; "compare two points" mode with side-by-side prediction panels and overlay deltas. Surrogate prediction intervals (W8 step-4) rendered as confidence bands when toggled on.
+- *step 2 (rediscovery + Pareto-front validation):* `/validate/rediscovery` page — for each registry rover (Pragyan, Yutu-2, MoonRanger, Rashid-1), run NSGA-II at the rover's published mass / mission / scenario constraints and overlay the rover's design point on the resulting Pareto front. This is the **headline paper figure** and the page reviewers will linger on. Backend caches the four canonical results and exposes a "rerun" affordance for the power-user / advisor case. Also includes the **Pareto-front validation pass**: after NSGA-II converges, re-evaluate every front point with the corrected evaluator and flag any point whose evaluator-true value falls behind a non-Pareto neighbour. Surrogate-vs-evaluator deltas are reported per objective.
+- *step 3 (SHAP + design rules):* `/api/shap` returns per-target global feature importance and per-design SHAP waterfalls (computed on demand against `roverdevkit.tradespace.design_rules`); UI `/shap` page renders both and supports "send the current design to the design panel." Output a static `reports/phase3_design_rules.md` summarising cross-scenario insights ("below 15 kg total mass, 4-wheel dominates; above, 6-wheel becomes Pareto-optimal because …").
+- *step 4 (validation + polish):* case-study presets (the four registry rovers + 2-3 archetype designs), URL-encoded permalinks (`#design=…&scenario=…&page=…`), CSV / JSON export of any rendered slice or Pareto front, "About" page with the methodology summary and citation snippet. Frontend test coverage targets ≥ 60 % component, ≥ 50 % E2E (Playwright).
+- *step 5 (deploy):* multi-stage Dockerfile (Node-build → Python-runtime), `docker-compose.yml` for local dev, `webapp/README.md` (dev quickstart, Docker quickstart, schema-add docs), root README "Try the tool" section, 90-second screencast for the paper supplementary. Hosted-demo readiness checklist: containerized, env-driven config, no hard-coded paths to absent local artifacts, lazy-load heavy models on first request to keep container start under 30 s.
+
+- *Deliverable for Phase 3:* a runnable, dockerized, locally-hosted tradespace tool with paper-quality polish; `reports/phase3_pareto/` containing the canonical fronts; `reports/phase3_design_rules.md`; rediscovery validation rendered on real rovers and exported as a static figure for the paper; webapp screencast linked from the root README.
+
+**Risk + scope-cut order (if Week 12 slips):** drop in this order — (1) screencast, (2) "compare two points" mode, (3) SHAP page (paper figure can be generated from the static `design_rules.py` module), (4) probabilistic feasibility (revert to the deterministic classifier-only feasibility from Week 11 step 1). The rediscovery view (step 2) and the deploy story (step 5) are non-negotiable; they're the paper figure and the credibility play.
 
 ### Phase 4: Paper (Weeks 13–15)
 
@@ -463,22 +482,52 @@ roverdevkit/
 │   │   ├── metrics.py                # R²/RMSE/MAPE, AUC/F1, per-scenario breakdowns
 │   │   └── benchmark_score.py        # Public leaderboard metric API (Phase 5)
 │   │
-│   ├── tradespace/
-│   │   ├── sweeps.py
-│   │   ├── optimizer.py              # NSGA-II via pymoo
-│   │   ├── design_rules.py           # SHAP + PDP
-│   │   └── visualize.py
+│   ├── tradespace/                  # Python core, imported by webapp/backend
+│   │   ├── sweeps.py                # Backend-dispatched 1-D / 2-D sweeps
+│   │   ├── optimizer.py             # NSGA-II via pymoo, with checkpoint callbacks
+│   │   ├── design_rules.py          # SHAP + PDP (used by /api/shap)
+│   │   └── visualize.py             # Static matplotlib figures for the paper
 │   │
 │   └── validation/
-│       ├── rover_rediscovery.py      # The headline validation
-│       ├── experimental_comparison.py
-│       └── error_budget.py
+│       └── rover_rediscovery.py     # Headline validation (also reachable via webapp /validate)
 │
-├── notebooks/                              # User-facing demos only
+├── webapp/                                  # Phase-3 interactive tradespace tool
+│   ├── README.md                            # Dev / Docker / hosting quickstart
+│   ├── Dockerfile                           # Multi-stage: FE build → BE runtime
+│   ├── docker-compose.yml                   # Local dev (BE :8000, FE :5173)
+│   ├── backend/
+│   │   ├── app.py                           # FastAPI factory + CORS + static mount
+│   │   ├── schemas.py                       # Pydantic v2: DesignVector, Prediction, …
+│   │   ├── loaders.py                       # Cached model / dataset / registry loaders
+│   │   ├── jobs.py                          # In-memory NSGA-II job store + TTL
+│   │   ├── deps.py                          # FastAPI dependency injection
+│   │   ├── routes/
+│   │   │   ├── predict.py                   # /api/predict      single design + PIs
+│   │   │   ├── sweep.py                     # /api/sweep        1-D / 2-D parametric
+│   │   │   ├── feasibility.py               # /api/feasibility  P(feasible) heatmap
+│   │   │   ├── evaluate.py                  # /api/evaluate     corrected evaluator (truth)
+│   │   │   ├── registry.py                  # /api/registry     rovers + truth table
+│   │   │   ├── scenarios.py                 # /api/scenarios    scenario family catalog
+│   │   │   ├── optimize.py                  # /api/optimize     POST + SSE + result
+│   │   │   ├── shap.py                      # /api/shap         feature importance
+│   │   │   └── validate.py                  # /api/validate/rediscovery
+│   │   └── tests/
+│   │
+│   └── frontend/
+│       ├── package.json, vite.config.ts, tailwind.config.ts, tsconfig.json
+│       ├── public/
+│       └── src/
+│           ├── main.tsx, App.tsx
+│           ├── routes/                       # /design /sweep /feasibility /pareto /shap /validate /about
+│           ├── components/                   # shadcn/ui-based building blocks
+│           ├── hooks/                        # TanStack Query hooks per endpoint
+│           ├── lib/                          # plotly helpers, permalinks, fmt
+│           ├── store/                        # Zustand: design vector + UI state
+│           └── types/                        # generated from Pydantic schemas
+│
+├── notebooks/                              # User-facing demos / paper-figure regen
 │   ├── 00_real_rover_validation.ipynb      # Evaluator validation against published rovers
-│   ├── 01_interactive_exploration.ipynb    # Week 10 — interactive surrogate sweeps
-│   ├── 02_pareto_fronts.ipynb              # Week 11 — NSGA-II Pareto fronts
-│   ├── 03_rediscover_real_rovers.ipynb     # Week 12 — rediscovery test (paper headline)
+│   ├── 03_rediscover_real_rovers.ipynb     # Week 12 — deterministic rediscovery numbers (paper)
 │   └── 04_reproduce_paper.ipynb            # Week 13 — regenerate every paper figure
 │
 ├── pretrained/
@@ -499,7 +548,9 @@ roverdevkit/
     └── test_benchmark_score.py             # Phase-5 public metric API
 ```
 
-The pretrained surrogate ships with the package so users can do tradespace exploration without installing PyChrono. The `roverbench/` subpackage is the public-facing benchmark interface for Paper 2.
+The pretrained surrogate ships with the package so users can do tradespace exploration without installing PyChrono. The `webapp/` package is the Phase-3 deliverable and the headline figure / supplementary screencast for Paper 1; it imports `roverdevkit.tradespace` and `roverdevkit.surrogate` in-process so there is no separate service boundary. The `roverbench/` subpackage is the public-facing benchmark interface for Paper 2 and can reuse the webapp's chrome for an optional leaderboard UI.
+
+Notebooks were trimmed: the previously-scoped `01_interactive_exploration.ipynb` and `02_pareto_fronts.ipynb` are subsumed by the webapp (`/design`, `/sweep`, `/pareto`); the rediscovery and paper-reproduction notebooks remain because static, deterministic numbers for the paper still belong in a notebook even when the same logic is also exposed interactively.
 
 ---
 
@@ -521,13 +572,15 @@ A Wheel-Level Multi-Fidelity Correction Architecture for Mission-Level Lunar Mic
 - **Key result 2 (framing).** Capability-envelope metric reproduces Pragyan and Yutu-2 hardware bounds at published ranges; operational utilisation is exposed as a post-hoc rescaling (`range_at_utilisation`) rather than a design variable.
 - **Key result 3 (rediscovery).** Optimizer rediscovers Rashid and Pragyan design points within stated tolerances when given matching mission constraints.
 - **Key result 4 (acceleration + UQ).** A mission-level XGBoost surrogate with calibrated quantile-regression prediction intervals serves as the NSGA-II inner-loop fitness function and the Phase-5 benchmark baseline; Pareto fronts are validated by re-evaluating with the corrected evaluator.
-- **Deliverable.** Open-source tool (`roverdevkit`) with the corrected mission evaluator, the wheel-level correction model, an optional pretrained mission-level surrogate, and the four-scenario library. Data and baselines released.
+- **Key result 5 (interactive tradespace tool).** A browser-based design-exploration tool (FastAPI + React) ships with the paper as the headline figure and supplementary screencast: single-design "what-if" with calibrated 90 % PIs, parametric sweeps, probabilistic constraint-feasibility heatmaps, custom-objective NSGA-II with live SSE progress, registry-rover overlays, and surrogate-vs-evaluator backend toggle, all dockerized for local-first use and trivially hostable.
+- **Deliverable.** Open-source tool (`roverdevkit`) with the corrected mission evaluator, the wheel-level correction model, an optional pretrained mission-level surrogate, the four-scenario library, and the interactive `webapp/` tradespace tool. Data and baselines released.
 
 ### Contributions (in priority order)
 1. **Wheel-level multi-fidelity correction architecture.** A small ML model (XGBoost on a 12-dimensional wheel-feature vector) trained on a ~500-row PyChrono SCM single-wheel sweep, composed back into the analytical Bekker-Wong traverse loop at every wheel-force step, lifts the entire mission evaluator to multi-fidelity at ~40 ms / mission cost. We empirically validate against direct SCM-in-the-loop on a shared sample (W7.7 bake-off) and show that BW + correction matches SCM-direct mission outputs while running 100× faster. The architecture is the methodological centrepiece: it is the only piece of new ML methodology in the paper, and it is what the methodology-paper contribution rests on.
 2. **Capability-envelope framing** that explicitly separates hardware-sustainable performance from ops-commanded utilisation, with a post-hoc rescaling (`range_at_utilisation`) for ops queries — making mission-level metrics a function of *what the rover can sustain* rather than *what an ops team chose to schedule*.
 3. **Open-source corrected mission evaluator** (not just a paper) validated against flown rover data, with the wheel-level correction model packaged as `roverdevkit.terramechanics.correction_model.WheelLevelCorrection` and an optional mission-level surrogate (XGBoost medians + quantile heads) for batch / UQ workflows.
-4. **Rediscovery test** as a falsifiable end-to-end validation of the combined stack against real flown rovers (Pragyan as the headline target; Yutu-2 and the design-target rovers MoonRanger / Rashid-1 as cross-checks).
+4. **Interactive browser-based tradespace tool** (`webapp/`) — FastAPI backend + React + shadcn/ui front end — that exposes the corrected evaluator and the surrogate / quantile heads through a paper-quality UI: single-design "what-if" with PIs, parametric sweeps, probabilistic constraint-feasibility, custom-objective NSGA-II with SSE progress, registry-rover overlays, surrogate-vs-evaluator backend toggle, SHAP per-target sensitivity, and reproducible permalinks. Dockerized for local-first use; trivially hostable. Lowers the entry barrier for reviewers, mission designers, and educators in a way no other open mission-level rover tool currently does.
+5. **Rediscovery test** as a falsifiable end-to-end validation of the combined stack against real flown rovers (Pragyan as the headline target; Yutu-2 and the design-target rovers MoonRanger / Rashid-1 as cross-checks). Rendered both as a static paper figure and as an interactive `/validate/rediscovery` page in the tool.
 
 ### 1. Introduction
 - Coupled design optimisation for lunar micro-rovers: why it matters, why existing tools are proprietary or spreadsheet-based
@@ -568,11 +621,12 @@ A Wheel-Level Multi-Fidelity Correction Architecture for Mission-Level Lunar Mic
 - 6.4 Accuracy results: aggregate and per-scenario, plus surrogate-vs-evaluator delta on the Phase-3 Pareto fronts
 - 6.5 Registry-rover sanity check (Layer-1 at real operating points), with the design-axis primary set vs scenario-OOD diagnostic split
 
-### 7. Tradespace Exploration
+### 7. Tradespace Exploration and the Interactive Tool
 - 7.1 NSGA-II setup with the surrogate as the inner-loop fitness function (median XGBoost predictions for objectives, feasibility classifier as a probabilistic constraint), three-objective Pareto, Pareto-uncertainty bands from the quantile heads
 - 7.2 Pareto fronts for the four mission scenarios, with surrogate-vs-corrected-evaluator deltas reported on each final front (the corrected evaluator is the source of truth; the surrogate is the search-loop accelerator)
 - 7.3 SHAP-based design rules on the surrogate (mission-level), with the wheel-level correction contribution exposed as a sub-model trace through the corrected evaluator's per-step diagnostics
 - 7.4 Cross-scenario insights: how optimal wheel size, drive duty, solar area, and battery sizing shift between equatorial mare, polar prospecting, highland slope, and crater rim missions
+- 7.5 The browser-based tradespace tool (`webapp/`): architecture (FastAPI + React + shadcn/ui), backend dispatch (corrected evaluator vs surrogate), live custom-objective NSGA-II via SSE, probabilistic feasibility via the quantile heads, registry overlays, paper-figure-quality screenshots, and a 90-second supplementary screencast
 
 ### 8. Validation Against Real Rovers
 - 8.1 Layered error budget (Layers 1-4 from §7 of this plan)
@@ -613,7 +667,7 @@ Release the 40k LHS v4 dataset (corrected evaluator outputs — i.e. BW + wheel-
 - **Prediction task only**, not a design-optimisation task. Given `(design, scenario)`, predict `MissionMetrics`. Scoring is held-out RMSE / R² / AUC, nothing more.
 - **Dataset**: Week-6 LHS parquet + Week-7 correction subset, with a canonical train/val/test split frozen at dataset generation time.
 - **Baselines**: linear, random forest, XGBoost, MLP, Paper-1 composed surrogate. Leaderboard scored on held-out test split.
-- **Infrastructure**: GitHub repo with submission-format spec + eval script; a Hugging Face Dataset card + Space for optional interactive evaluation; manual leaderboard updates (no automated CI).
+- **Infrastructure**: GitHub repo with submission-format spec + eval script; a Hugging Face Dataset card + Space for optional interactive evaluation (the Phase-3 `webapp/` chrome — design panel, sweep page, Pareto explorer — can be reused as a leaderboard browse / per-submission inspection UI with very little extra code); manual leaderboard updates (no automated CI).
 
 ### Why D-narrow (not D-broad design-optimisation benchmark)
 - Prediction tasks pull from a broad ML-surrogate / physics-informed-ML community (thousands of active researchers); design-optimisation benchmarks pull from a ~50-person community.
@@ -644,6 +698,11 @@ See §6 "Phase 5: Benchmark Release" for the concrete week-by-week work.
 | pyDOE2 | Latin Hypercube Sampling | `pip install pyDOE2` |
 | matplotlib / plotly | Visualization | `pip install matplotlib plotly` |
 | ipywidgets | Interactive notebooks | `pip install ipywidgets` |
+| FastAPI / Uvicorn | Phase-3 webapp backend (REST + SSE) | `pip install 'roverdevkit[webapp]'` |
+| sse-starlette | Streaming NSGA-II progress | (transitive via `[webapp]` extra) |
+| httpx | Backend test client | (transitive via `[webapp]` extra) |
+| Node.js 20 LTS + npm | Phase-3 frontend toolchain (Vite, TS, React) | `nvm install 20 && nvm use 20` |
+| Docker + Docker Compose | Phase-3 webapp containerization (local + future hosting) | Docker Desktop / colima |
 
 ---
 
@@ -658,9 +717,9 @@ See §6 "Phase 5: Benchmark Release" for the concrete week-by-week work.
 - [ ] Week 7: SCM data generated (if active) or feature engineering complete
 - [ ] Week 7.5: SCM correction-magnitude gate decided; ship composed surrogate vs bounded sensitivity recorded in project log
 - [ ] Week 8: Final surrogate with uncertainty quantification
-- [ ] Week 10: Tradespace sweep tool functional
-- [ ] Week 11: NSGA-II Pareto fronts generated for all scenarios
-- [ ] Week 12: SHAP analysis, rediscovery validation, tool packaged
+- [ ] Week 10: Webapp MVP — FastAPI backend (`/predict`, `/evaluate`, `/registry`, `/scenarios`) and React+shadcn frontend with single-design panel running under both surrogate and corrected-evaluator backends
+- [ ] Week 11: Webapp sweeps + probabilistic feasibility + NSGA-II infrastructure (SSE-streamed custom Pareto runs, in-memory job store, pre-computed canonical fronts in `reports/phase3_pareto/`)
+- [ ] Week 12: Webapp Pareto explorer + rediscovery validation page + SHAP + dockerized deploy + screencast (Phase-3 deliverable complete)
 - [ ] Week 13: All figures generated; Layer-3 BW-vs-Wong literature check replaces xfail; consolidated `reports/error_budget.md` complete
 - [ ] Week 14: Paper 1 draft complete
 - [ ] Week 15: Paper 1 revised and ready for submission
