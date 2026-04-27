@@ -28,13 +28,14 @@ export default defineConfig({
       // Forward backend calls during dev so the frontend can talk to
       // the FastAPI server without baking in an absolute URL. The
       // backend mounts routes at /healthz, /scenarios, /registry,
-      // /predict, /version (no /api prefix yet); the proxy mirrors
-      // that 1:1.
+      // /predict, /evaluate, /version (no /api prefix yet); the proxy
+      // mirrors that 1:1.
       "/healthz": "http://localhost:8000",
       "/version": "http://localhost:8000",
       "/scenarios": "http://localhost:8000",
       "/registry": "http://localhost:8000",
       "/predict": "http://localhost:8000",
+      "/evaluate": "http://localhost:8000",
     },
   },
 });

@@ -113,16 +113,23 @@ export function AboutModelDialog({ children }: { children: React.ReactNode }) {
 
           <section>
             <h3 className="font-medium text-[var(--color-foreground)]">
-              Surrogate model
+              How a single design is predicted
             </h3>
             <p className="text-[var(--color-muted-foreground)]">
-              For each performance metric the tool fits three quantile
-              XGBoost regressors at τ = 0.05, 0.50, and 0.95, giving a
-              median prediction and a 90% prediction interval. Hyperparameters
-              were tuned with Optuna on a squared-error baseline, then reused
-              across the three quantile heads with the loss switched to
-              pinball. The median heads land within 0.005 R² of the
-              squared-error baseline on the test split.
+              For one design × one scenario the tool runs the corrected
+              physics evaluator end-to-end (~30 ms) and reports its
+              deterministic output as the median value of each
+              performance metric. To quantify uncertainty around that
+              median, the same inputs are passed to a learned surrogate
+              that fits three quantile XGBoost regressors per metric at
+              τ = 0.05, 0.50, and 0.95; the q05–q95 envelope is the
+              calibrated 90% prediction interval shown as a blue bar
+              around the median. Hyperparameters were tuned with Optuna
+              on a squared-error baseline and reused across the three
+              quantile heads with the loss switched to pinball. The
+              surrogate is also what powers the larger batch workflows
+              (multi-objective search, feasibility heatmaps) where 30 ms
+              per design is too slow.
             </p>
           </section>
 

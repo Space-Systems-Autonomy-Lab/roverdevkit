@@ -32,6 +32,11 @@ from roverdevkit.mission.scenarios import list_scenarios, load_scenario
 from roverdevkit.schema import MissionScenario, ScenarioName
 from roverdevkit.surrogate.uncertainty import QuantileHeads
 from roverdevkit.terramechanics.bekker_wong import SoilParameters
+from roverdevkit.terramechanics.correction_model import (
+    DEFAULT_CORRECTION_PATH,
+    WheelLevelCorrection,
+    load_correction_or_none,
+)
 from roverdevkit.terramechanics.soils import get_soil_parameters
 from roverdevkit.validation.rover_registry import (
     RoverRegistryEntry,
@@ -119,6 +124,25 @@ def get_registry() -> tuple[RoverRegistryEntry, ...]:
 
 
 # ---------------------------------------------------------------------------
+# Wheel-level SCM correction (optional; required for the corrected evaluator)
+# ---------------------------------------------------------------------------
+
+
+@lru_cache(maxsize=1)
+def get_correction() -> WheelLevelCorrection | None:
+    """Return the production wheel-level SCM correction artifact, if available.
+
+    The artifact lives at
+    :data:`roverdevkit.terramechanics.correction_model.DEFAULT_CORRECTION_PATH`
+    and is shared by every ``/evaluate`` call so the joblib load only
+    happens once per process. Returns ``None`` when the file is missing
+    so the route can fall back to the BW-only path with an explicit
+    error rather than silently degrading to a different physics model.
+    """
+    return load_correction_or_none(DEFAULT_CORRECTION_PATH, on_missing="warn")
+
+
+# ---------------------------------------------------------------------------
 # Test / dev helpers
 # ---------------------------------------------------------------------------
 
@@ -129,3 +153,4 @@ def reset_caches() -> None:
     get_canonical_scenarios.cache_clear()
     get_soil_for_simulant.cache_clear()
     get_registry.cache_clear()
+    get_correction.cache_clear()

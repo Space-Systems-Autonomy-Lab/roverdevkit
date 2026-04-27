@@ -27,9 +27,13 @@ from roverdevkit.schema import DesignVector, MissionScenario
 # consistent with the Python core.
 __all__ = [
     "DesignVector",
+    "EvaluateMetric",
+    "EvaluateRequest",
+    "EvaluateResponse",
     "FeatureRow",
     "HealthResponse",
     "MissionScenario",
+    "MotorTorqueDiagnosticOut",
     "PredictRequest",
     "PredictResponse",
     "PredictTarget",
@@ -38,6 +42,7 @@ __all__ = [
     "ScenarioListResponse",
     "ScenarioWithSoil",
     "SoilParametersOut",
+    "ThermalDiagnosticOut",
     "VersionResponse",
 ]
 
@@ -229,3 +234,101 @@ class PredictResponse(BaseModel):
     quantiles: tuple[float, float, float] = (0.05, 0.50, 0.95)
     predictions: list[PredictTarget]
     feature_row: FeatureRow
+
+
+# ---------------------------------------------------------------------------
+# Evaluate (deterministic mission evaluator with SCM correction)
+# ---------------------------------------------------------------------------
+
+
+class EvaluateRequest(BaseModel):
+    """Input payload for :http:post:`/evaluate`.
+
+    Drives the corrected mission evaluator
+    (:func:`roverdevkit.mission.evaluator.evaluate`, BW + wheel-level
+    SCM correction) on a single ``DesignVector`` and a canonical
+    scenario. Used by the single-design panel as the source of truth
+    for the median value of each performance metric; the surrogate's
+    quantile heads supply the prediction-interval band around it.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    design: DesignVector
+    scenario_name: str = Field(
+        description="Canonical scenario key (one of the four returned by /scenarios)."
+    )
+
+
+class EvaluateMetric(BaseModel):
+    """Per-target deterministic value from the corrected evaluator."""
+
+    model_config = ConfigDict(frozen=True)
+
+    target: PrimaryTarget
+    value: float
+
+
+class ThermalDiagnosticOut(BaseModel):
+    """Per-design output of the lumped-parameter thermal model.
+
+    The single-design panel surfaces both temperatures so users can
+    see *why* a thermal-survival flag fired (it's almost always the
+    cold case for micro-rovers without RHUs). ``rhu_power_w`` is
+    included because it's the most common knob users would reach for
+    if they were sizing a real rover; in our design vector it is
+    fixed at 0 W by convention -- thermal is a diagnostic, not a
+    design lever, since W6.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    survives: bool
+    """End-to-end pass / fail (= ``hot_case_ok and cold_case_ok``)."""
+
+    peak_sun_temp_c: float
+    lunar_night_temp_c: float
+    min_operating_temp_c: float
+    max_operating_temp_c: float
+    rhu_power_w: float
+    hibernation_power_w: float
+    surface_area_m2: float
+    hot_case_ok: bool
+    cold_case_ok: bool
+
+
+class MotorTorqueDiagnosticOut(BaseModel):
+    """Peak motor torque vs the sizing-time per-wheel ceiling.
+
+    See :class:`webapp.backend.services.evaluate.MotorTorqueDiagnostic`
+    for the closed form.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    survives: bool
+    """End-to-end pass / fail (matches ``MissionMetrics.motor_torque_ok``)."""
+
+    peak_torque_nm: float
+    ceiling_nm: float
+    rover_stalled: bool
+    torque_ok: bool
+
+
+class EvaluateResponse(BaseModel):
+    """Deterministic evaluator output for the four primary regression targets.
+
+    Values match :class:`roverdevkit.schema.MissionMetrics` 1:1 for the
+    primary subset; the response also surfaces structured constraint
+    diagnostics (``thermal``, ``motor_torque``) so the frontend can
+    explain *why* a flag fired without a second round-trip.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    scenario_name: str
+    metrics: list[EvaluateMetric]
+    thermal: ThermalDiagnosticOut
+    motor_torque: MotorTorqueDiagnosticOut
+    used_scm_correction: bool
+    elapsed_ms: float

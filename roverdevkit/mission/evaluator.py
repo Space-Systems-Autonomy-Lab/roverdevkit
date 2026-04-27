@@ -75,8 +75,9 @@ from roverdevkit.mission.capability import max_climbable_slope_deg
 from roverdevkit.mission.traverse_sim import TraverseLog, run_traverse
 from roverdevkit.power.thermal import (
     ThermalArchitecture,
+    ThermalResult,
     default_architecture_for_design,
-    survives_mission,
+    evaluate_thermal,
 )
 from roverdevkit.schema import DesignVector, MissionMetrics, MissionScenario
 from roverdevkit.terramechanics.bekker_wong import SoilParameters, WheelGeometry
@@ -97,12 +98,16 @@ class DetailedEvaluation:
     (peak/mean/p95 of drawbar pull, sinkage, motor torque, solar power,
     battery SOC) that the single-scalar :class:`MissionMetrics` does not
     expose. The :class:`MassBreakdown` is kept alongside so per-subsystem
-    mass is recoverable without re-running the mass model.
+    mass is recoverable without re-running the mass model. The full
+    :class:`ThermalResult` is also surfaced (Phase-3 web app reads
+    peak / cold temperatures so the constraint chip can explain *why*
+    a survival flag fired).
     """
 
     metrics: MissionMetrics
     log: TraverseLog
     mass: MassBreakdown
+    thermal: ThermalResult
 
 
 def _sizing_peak_torque_nm(
@@ -254,11 +259,12 @@ def evaluate_verbose(
         # for a 6 kg chassis and ~0.24 m^2 for a 30 kg chassis.
         surface_area_m2 = 0.02 * (design.chassis_mass_kg ** (2.0 / 3.0)) + 0.05
         thermal_architecture = default_architecture_for_design(surface_area_m2=surface_area_m2)
-    thermal_ok = survives_mission(
+    thermal_result = evaluate_thermal(
         thermal_architecture,
         design.avionics_power_w,
         scenario.latitude_deg,
     )
+    thermal_ok = thermal_result.survives
 
     soil = (
         soil_override if soil_override is not None else get_soil_parameters(scenario.soil_simulant)
@@ -324,7 +330,9 @@ def evaluate_verbose(
         thermal_survival=thermal_ok,
         motor_torque_ok=motor_torque_ok,
     )
-    return DetailedEvaluation(metrics=metrics, log=log, mass=breakdown)
+    return DetailedEvaluation(
+        metrics=metrics, log=log, mass=breakdown, thermal=thermal_result
+    )
 
 
 def evaluate(

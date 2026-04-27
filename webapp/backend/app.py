@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from webapp.backend.config import Settings, get_settings
+from webapp.backend.routes import evaluate as evaluate_routes
 from webapp.backend.routes import health as health_routes
 from webapp.backend.routes import predict as predict_routes
 from webapp.backend.routes import registry as registry_routes
@@ -64,6 +65,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(scenarios_routes.router)
     app.include_router(registry_routes.router)
     app.include_router(predict_routes.router)
+    app.include_router(evaluate_routes.router)
 
     logger.info(
         "FastAPI app built (artifacts_present=%s, dataset_version=%s)",

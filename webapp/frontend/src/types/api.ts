@@ -78,6 +78,18 @@ export type PrimaryTarget =
   | "slope_capability_deg"
   | "total_mass_kg";
 
+/**
+ * Canonical row order used everywhere the four primary targets are
+ * rendered. Matches `roverdevkit.surrogate.features.PRIMARY_REGRESSION_TARGETS`
+ * so the Python and TypeScript layers agree by construction.
+ */
+export const PRIMARY_REGRESSION_TARGET_ORDER: readonly PrimaryTarget[] = [
+  "range_km",
+  "energy_margin_raw_pct",
+  "slope_capability_deg",
+  "total_mass_kg",
+] as const;
+
 export interface PredictTarget {
   target: PrimaryTarget;
   q05: number;
@@ -103,6 +115,74 @@ export interface PredictResponse {
   feature_row: FeatureRow;
 }
 
+/**
+ * Mirror of the FastAPI `EvaluateRequest`. Drives the deterministic
+ * corrected mission evaluator on a single design × canonical scenario.
+ * Used by the single-design panel as the source of truth for the
+ * median value of each performance metric; the surrogate's quantile
+ * heads supply the prediction-interval band around it.
+ */
+export interface EvaluateRequest {
+  design: DesignVector;
+  scenario_name: string;
+}
+
+export interface EvaluateMetric {
+  target: PrimaryTarget;
+  value: number;
+}
+
+/**
+ * Mirror of the FastAPI `ThermalDiagnosticOut`. Every numeric field is
+ * already in the user's display units (°C, W, m²) so the panel and
+ * dialog can render them without conversion.
+ */
+export interface ThermalDiagnostic {
+  survives: boolean;
+  peak_sun_temp_c: number;
+  lunar_night_temp_c: number;
+  min_operating_temp_c: number;
+  max_operating_temp_c: number;
+  rhu_power_w: number;
+  hibernation_power_w: number;
+  surface_area_m2: number;
+  hot_case_ok: boolean;
+  cold_case_ok: boolean;
+}
+
+/** Mirror of the FastAPI `MotorTorqueDiagnosticOut`. */
+export interface MotorTorqueDiagnostic {
+  survives: boolean;
+  peak_torque_nm: number;
+  ceiling_nm: number;
+  rover_stalled: boolean;
+  torque_ok: boolean;
+}
+
+export interface EvaluateResponse {
+  scenario_name: string;
+  metrics: EvaluateMetric[];
+  thermal: ThermalDiagnostic;
+  motor_torque: MotorTorqueDiagnostic;
+  used_scm_correction: boolean;
+  elapsed_ms: number;
+}
+
+/**
+ * Merged per-target row consumed by the chart and the panel table.
+ *
+ * - `value` is the deterministic median from the evaluator (ground truth).
+ * - `q05`/`q95` are the surrogate's calibrated 90% prediction interval
+ *   wrapping that median. Both may be `undefined` while the
+ *   corresponding request is in flight or has failed.
+ */
+export interface PredictionRow {
+  target: PrimaryTarget;
+  value: number;
+  q05: number | null;
+  q95: number | null;
+}
+
 export interface HealthResponse {
   status: "ok" | "degraded";
   surrogate_loaded: boolean;
@@ -115,6 +195,22 @@ export interface VersionResponse {
   package_version: string;
   dataset_version: string;
   quantile_bundles_path: string;
+}
+
+export interface RegistryEntrySummary {
+  rover_name: string;
+  is_flown: boolean;
+  design: DesignVector;
+  scenario: MissionScenario;
+  gravity_m_per_s2: number;
+  thermal_architecture: Record<string, unknown>;
+  panel_efficiency: number;
+  panel_dust_factor: number;
+  imputation_notes: string;
+}
+
+export interface RegistryListResponse {
+  rovers: RegistryEntrySummary[];
 }
 
 /**

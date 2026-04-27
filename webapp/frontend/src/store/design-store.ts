@@ -37,6 +37,8 @@ export const DEFAULT_DESIGN: DesignVector = {
 interface DesignState {
   design: DesignVector;
   scenarioName: ScenarioName;
+  /** Names of registry rovers whose predictions should be overlaid on the chart. */
+  overlayRovers: string[];
   setDesignField: <K extends keyof DesignVector>(
     key: K,
     value: DesignVector[K],
@@ -44,14 +46,24 @@ interface DesignState {
   setDesign: (design: DesignVector) => void;
   setScenario: (name: ScenarioName) => void;
   resetDesign: () => void;
+  toggleOverlayRover: (name: string) => void;
+  clearOverlayRovers: () => void;
 }
 
 export const useDesignStore = create<DesignState>()((set) => ({
   design: DEFAULT_DESIGN,
   scenarioName: "equatorial_mare_traverse",
+  overlayRovers: [],
   setDesignField: (key, value) =>
     set((state) => ({ design: { ...state.design, [key]: value } })),
   setDesign: (design) => set({ design }),
   setScenario: (name) => set({ scenarioName: name }),
   resetDesign: () => set({ design: DEFAULT_DESIGN }),
+  toggleOverlayRover: (name) =>
+    set((state) => ({
+      overlayRovers: state.overlayRovers.includes(name)
+        ? state.overlayRovers.filter((r) => r !== name)
+        : [...state.overlayRovers, name],
+    })),
+  clearOverlayRovers: () => set({ overlayRovers: [] }),
 }));
